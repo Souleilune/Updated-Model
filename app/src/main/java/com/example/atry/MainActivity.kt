@@ -2,6 +2,7 @@ package com.example.atry
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -19,7 +20,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -89,7 +89,6 @@ class MainActivity : ComponentActivity() {
     private fun MainContent() {
         val context = LocalContext.current
 
-        // Track permission state more robustly
         var hasCameraPermission by remember {
             mutableStateOf(
                 ContextCompat.checkSelfPermission(
@@ -102,7 +101,6 @@ class MainActivity : ComponentActivity() {
         var permissionRequested by remember { mutableStateOf(false) }
         var permissionDenied by remember { mutableStateOf(false) }
 
-        // Enhanced permission launcher with better error handling
         val permissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestPermission()
         ) { isGranted ->
@@ -118,11 +116,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Request permission on first launch
         LaunchedEffect(Unit) {
             if (!hasCameraPermission && !permissionRequested) {
                 Log.d(TAG, "Requesting camera permission")
-                delay(300) // Small delay to ensure UI is ready
+                delay(300)
                 permissionLauncher.launch(Manifest.permission.CAMERA)
             }
         }
@@ -131,7 +128,7 @@ class MainActivity : ComponentActivity() {
             when {
                 hasCameraPermission -> {
                     Log.d(TAG, "Camera permission granted, showing camera preview")
-                    CameraPreviewWithYOLOv11()
+                    AutomaticCameraPreviewWithYOLOv11()
                 }
                 permissionDenied -> {
                     PermissionDeniedScreen {
@@ -256,35 +253,32 @@ private fun PermissionDeniedScreen(onRetry: () -> Unit) {
 }
 
 @Composable
-private fun CameraPreviewWithYOLOv11() {
+private fun AutomaticCameraPreviewWithYOLOv11() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    Log.d("CameraPreview", "Initializing camera preview")
+    Log.d("HighFPS", "Initializing high-FPS camera preview")
 
-    // Create detector with error handling
     val detector = remember {
         try {
-            Log.d("CameraPreview", "Creating YOLOv11 detector")
+            Log.d("HighFPS", "Creating optimized YOLOv11 detector")
             YOLOv11ObjectDetector(
                 context = context,
                 modelPath = "new model.tflite",
-                confThreshold = 0.15f,
+                confThreshold = 0.2f, // Lowered for better detection
                 iouThreshold = 0.45f
             )
         } catch (e: Exception) {
-            Log.e("CameraPreview", "Failed to create detector: ${e.message}", e)
+            Log.e("HighFPS", "Failed to create detector: ${e.message}", e)
             Toast.makeText(context, "Failed to load AI model: ${e.message}", Toast.LENGTH_LONG).show()
             null
         }
     }
 
-    // Create analyzer and report generator
     val analyzer = remember { BarPathAnalyzer() }
     val reportGenerator = remember { ReportGenerator(context) }
 
-    // Early return if detector creation failed
     if (detector == null) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -308,83 +302,113 @@ private fun CameraPreviewWithYOLOv11() {
         return
     }
 
-    // PreviewView instance
     val previewView = remember { PreviewView(context) }
 
-    // State variables
+    // State variables for high-FPS automatic tracking
     var detections by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var isProcessing by remember { mutableStateOf(false) }
     var fps by remember { mutableStateOf(0f) }
     var cameraError by remember { mutableStateOf<String?>(null) }
 
-    // Enhanced bar path tracking state with session management
-    var barPaths by remember { mutableStateOf<List<BarPath>>(listOf(BarPath())) }
+    // Enhanced automatic bar path tracking state
+    var barPaths by remember { mutableStateOf<List<BarPath>>(listOf()) }
     var currentMovement by remember { mutableStateOf<MovementAnalysis?>(null) }
     var repCount by remember { mutableStateOf(0) }
-    var isRecording by remember { mutableStateOf(false) }
-
-    // Session management state
-    var sessionStartTime by remember { mutableStateOf(0L) }
-    var sessionEndTime by remember { mutableStateOf(0L) }
+    var totalDistance by remember { mutableStateOf(0f) }
+    var sessionStartTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var allMovements by remember { mutableStateOf<List<MovementAnalysis>>(emptyList()) }
     var isGeneratingReport by remember { mutableStateOf(false) }
+
+    // Automatic tracking state
+    var lastDetectionTime by remember { mutableStateOf(0L) }
+    var activeTrackingSession by remember { mutableStateOf(false) }
+    var pathStartTime by remember { mutableStateOf(0L) }
 
     // FPS calculation
     var frameCount by remember { mutableStateOf(0) }
     var lastFpsUpdate by remember { mutableStateOf(System.currentTimeMillis()) }
 
-    // Constants for path tracking
-    val maxPathPoints = 500
-    val minMovementThreshold = 0.02f
-    val stableThreshold = 0.01f
+    // HIGH-FPS optimized constants
+    val maxPathPoints = 150 // Reduced for better performance
+    val minMovementThreshold = 0.02f // Optimized threshold
+    val inactivityTimeoutMs = 2500L // Reduced timeout
+    val minSessionDurationMs = 1500L // Reduced minimum duration
 
-    // Dispose detector when composable is removed
+    // FPS optimization variables
+    var cachedDetections by remember { mutableStateOf<List<Detection>>(emptyList()) }
+
     DisposableEffect(detector) {
         onDispose {
             try {
                 detector.close()
-                Log.d("CameraPreview", "Detector closed successfully")
+                Log.d("HighFPS", "Detector closed successfully")
             } catch (e: Exception) {
-                Log.e("CameraPreview", "Error closing detector: ${e.message}", e)
+                Log.e("HighFPS", "Error closing detector: ${e.message}", e)
             }
         }
     }
 
-    // Camera setup with enhanced error handling
+    // HIGH-FPS Camera setup with aggressive optimizations
     LaunchedEffect(previewView) {
         try {
-            Log.d("CameraPreview", "Setting up camera")
+            Log.d("HighFPS", "Setting up high-FPS camera")
             val cameraProvider = ProcessCameraProvider.getInstance(context).get()
 
             val preview = Preview.Builder()
+                .setTargetResolution(Size(480, 480))  // Smaller resolution for speed
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             val imageAnalysis = androidx.camera.core.ImageAnalysis.Builder()
+                .setTargetResolution(Size(480, 480))  // Smaller for faster processing
                 .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setImageQueueDepth(1)
                 .build()
                 .also { analyzer ->
                     analyzer.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                        if (!isProcessing) {
+
+                        frameCount++
+                        val currentTime = System.currentTimeMillis()
+
+                        // ADAPTIVE FRAME SKIPPING based on FPS performance
+                        val shouldProcess = when {
+                            fps < 8f -> frameCount % 6 == 0   // Very aggressive skipping
+                            fps < 12f -> frameCount % 4 == 0  // Aggressive skipping
+                            fps < 18f -> frameCount % 3 == 0  // Moderate skipping
+                            else -> frameCount % 2 == 0       // Light skipping
+                        }
+
+                        if (shouldProcess && !isProcessing) {
                             isProcessing = true
 
                             try {
+                                // FAST PROCESSING with smaller image
                                 val bitmap = BitmapUtils.imageProxyToBitmap(imageProxy)
-                                val newDetections = detector.detect(bitmap)
+                                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 320, 320, false)
+                                val newDetections = detector.detect(scaledBitmap)
 
-                                // Update detections on main thread
+                                cachedDetections = newDetections
                                 detections = newDetections
 
-                                Log.d("CameraPreview", "Frame processed - Detections: ${newDetections.size}")
+                                // FAST TRACKING LOGIC
+                                if (newDetections.isNotEmpty()) {
+                                    lastDetectionTime = currentTime
 
-                                // Process bar path tracking ONLY when recording
-                                if (isRecording && newDetections.isNotEmpty()) {
-                                    Log.d("CameraPreview", "Processing bar path - Recording is ON")
-                                    val updatedData = processBarPath(
+                                    if (!activeTrackingSession) {
+                                        activeTrackingSession = true
+                                        pathStartTime = currentTime
+                                        sessionStartTime = currentTime
+                                        barPaths = listOf(BarPath())
+                                        Log.d("HighFPS", "Fast tracking session started")
+                                    }
+
+                                    // ULTRA-FAST PATH PROCESSING
+                                    val updatedData = processFastBarPath(
                                         detections = newDetections,
                                         currentPaths = barPaths,
+                                        currentTime = currentTime,
                                         maxPoints = maxPathPoints,
                                         minThreshold = minMovementThreshold
                                     )
@@ -392,38 +416,50 @@ private fun CameraPreviewWithYOLOv11() {
                                     barPaths = updatedData.paths
                                     currentMovement = updatedData.movement
                                     repCount = updatedData.repCount
+                                    totalDistance = updatedData.totalDistance
 
-                                    // Add movement to session data
                                     currentMovement?.let { movement ->
                                         allMovements = allMovements + movement
                                     }
-                                } else if (!isRecording) {
-                                    Log.d("CameraPreview", "Not recording - skipping bar path processing")
+
+                                } else {
+                                    // Quick timeout check
+                                    if (activeTrackingSession &&
+                                        currentTime - lastDetectionTime > inactivityTimeoutMs) {
+                                        activeTrackingSession = false
+                                        Log.d("HighFPS", "Fast session ended")
+                                    }
                                 }
 
-                                // Calculate FPS
-                                frameCount++
-                                val currentTime = System.currentTimeMillis()
+                                // EFFICIENT FPS calculation
                                 if (currentTime - lastFpsUpdate >= 1000) {
                                     fps = frameCount * 1000f / (currentTime - lastFpsUpdate)
                                     frameCount = 0
                                     lastFpsUpdate = currentTime
+                                    Log.d("HighFPS", "FPS: ${String.format("%.1f", fps)}")
                                 }
 
                             } catch (e: Exception) {
-                                Log.e("CameraPreview", "Error processing frame: ${e.message}", e)
-                                cameraError = "Frame processing error: ${e.message}"
+                                Log.e("HighFPS", "Fast processing error: ${e.message}")
                             } finally {
                                 isProcessing = false
                                 imageProxy.close()
                             }
                         } else {
+                            // SKIP FRAME - use cached detections for smooth UI
+                            detections = cachedDetections
                             imageProxy.close()
+
+                            // Still update FPS counter for skipped frames
+                            if (currentTime - lastFpsUpdate >= 1000) {
+                                fps = frameCount * 1000f / (currentTime - lastFpsUpdate)
+                                frameCount = 0
+                                lastFpsUpdate = currentTime
+                            }
                         }
                     }
                 }
 
-            // Bind camera with error handling
             cameraProvider.unbindAll()
             cameraProvider.bindToLifecycle(
                 lifecycleOwner,
@@ -432,21 +468,42 @@ private fun CameraPreviewWithYOLOv11() {
                 imageAnalysis
             )
 
-            Log.d("CameraPreview", "Camera bound successfully")
-            cameraError = null // Clear any previous errors
+            Log.d("HighFPS", "High-FPS camera setup completed successfully")
+            cameraError = null
 
         } catch (e: Exception) {
-            val errorMsg = "Camera setup failed: ${e.message}"
-            Log.e("CameraPreview", errorMsg, e)
+            val errorMsg = "High-FPS camera setup failed: ${e.message}"
+            Log.e("HighFPS", errorMsg, e)
             cameraError = errorMsg
             Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Auto-cleanup paths every 30 seconds
+    LaunchedEffect(barPaths) {
+        delay(30000)
+        if (!activeTrackingSession && barPaths.isNotEmpty()) {
+            val currentTime = System.currentTimeMillis()
+            val cleanedPaths = barPaths.map { path ->
+                if (path.points.isNotEmpty()) {
+                    val cutoffTime = currentTime - 15000L
+                    val filteredPoints = path.points.filter { it.timestamp > cutoffTime }
+                    path.copy(points = filteredPoints.toMutableList())
+                } else {
+                    path
+                }
+            }.filter { it.points.isNotEmpty() }
+
+            if (cleanedPaths != barPaths) {
+                barPaths = cleanedPaths
+                Log.d("HighFPS", "Auto-cleaned old path segments")
+            }
         }
     }
 
     // UI Layout
     Box(modifier = Modifier.fillMaxSize()) {
         if (cameraError != null) {
-            // Show error state
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -466,62 +523,39 @@ private fun CameraPreviewWithYOLOv11() {
                         textAlign = TextAlign.Center,
                         modifier = Modifier.padding(16.dp)
                     )
-                    Button(
-                        onClick = {
-                            cameraError = null
-                            // Trigger camera restart by updating the LaunchedEffect
-                        }
-                    ) {
+                    Button(onClick = { cameraError = null }) {
                         Text("Retry")
                     }
                 }
             }
         } else {
-            // Camera Preview
             AndroidView(
                 factory = { previewView },
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Detection and Path Overlay with Debug Features
             Canvas(modifier = Modifier.fillMaxSize()) {
-                // Draw detections
                 drawDetections(detections, detector)
-
-                // Draw bar paths
-                drawBarPaths(barPaths)
+                drawAutomaticBarPaths(barPaths)
             }
 
-            // Enhanced Info Panel with Report Generation
-            EnhancedInfoPanel(
+            AutomaticInfoPanel(
                 detections = detections,
                 fps = fps,
                 isProcessing = isProcessing,
                 currentMovement = currentMovement,
                 repCount = repCount,
-                isRecording = isRecording,
+                totalDistance = totalDistance,
+                activeTrackingSession = activeTrackingSession,
                 isGeneratingReport = isGeneratingReport,
-                onStartStopRecording = {
-                    isRecording = !isRecording
-                    Log.d("CameraPreview", "Recording toggled - isRecording: $isRecording")
-                    if (isRecording) {
-                        // Start fresh when recording starts
-                        barPaths = listOf(BarPath())
-                        repCount = 0
-                        allMovements = emptyList()
-                        sessionStartTime = System.currentTimeMillis()
-                        Log.d("CameraPreview", "Started recording - cleared paths")
-                    } else {
-                        sessionEndTime = System.currentTimeMillis()
-                        Log.d("CameraPreview", "Stopped recording")
-                    }
-                },
-                onClearPath = {
-                    barPaths = listOf(BarPath())
+                onClearPaths = {
+                    barPaths = listOf()
                     repCount = 0
+                    totalDistance = 0f
                     currentMovement = null
                     allMovements = emptyList()
-                    Log.d("CameraPreview", "Cleared all paths")
+                    activeTrackingSession = false
+                    Log.d("HighFPS", "Manually cleared all paths")
                 },
                 onGenerateExcelReport = {
                     scope.launch {
@@ -529,7 +563,7 @@ private fun CameraPreviewWithYOLOv11() {
                         try {
                             val session = ReportGenerator.WorkoutSession(
                                 startTime = sessionStartTime,
-                                endTime = if (sessionEndTime > 0) sessionEndTime else System.currentTimeMillis(),
+                                endTime = System.currentTimeMillis(),
                                 totalReps = repCount,
                                 paths = barPaths,
                                 movements = allMovements
@@ -543,7 +577,7 @@ private fun CameraPreviewWithYOLOv11() {
                                 },
                                 onFailure = { error ->
                                     Toast.makeText(context, "Error generating Excel report: ${error.message}", Toast.LENGTH_LONG).show()
-                                    Log.e("CameraPreview", "Excel report error", error)
+                                    Log.e("HighFPS", "Excel report error", error)
                                 }
                             )
                         } finally {
@@ -557,7 +591,7 @@ private fun CameraPreviewWithYOLOv11() {
                         try {
                             val session = ReportGenerator.WorkoutSession(
                                 startTime = sessionStartTime,
-                                endTime = if (sessionEndTime > 0) sessionEndTime else System.currentTimeMillis(),
+                                endTime = System.currentTimeMillis(),
                                 totalReps = repCount,
                                 paths = barPaths,
                                 movements = allMovements
@@ -571,7 +605,7 @@ private fun CameraPreviewWithYOLOv11() {
                                 },
                                 onFailure = { error ->
                                     Toast.makeText(context, "Error generating CSV report: ${error.message}", Toast.LENGTH_LONG).show()
-                                    Log.e("CameraPreview", "CSV report error", error)
+                                    Log.e("HighFPS", "CSV report error", error)
                                 }
                             )
                         } finally {
@@ -585,7 +619,239 @@ private fun CameraPreviewWithYOLOv11() {
     }
 }
 
-// Keep existing drawing functions (drawDetections, drawBarPaths, etc.)
+// Data classes
+data class AutomaticBarPathResult(
+    val paths: List<BarPath>,
+    val movement: MovementAnalysis?,
+    val repCount: Int,
+    val totalDistance: Float
+)
+
+// ULTRA-FAST BAR PATH PROCESSING for high FPS
+private fun processFastBarPath(
+    detections: List<Detection>,
+    currentPaths: List<BarPath>,
+    currentTime: Long,
+    maxPoints: Int,
+    minThreshold: Float
+): AutomaticBarPathResult {
+
+    if (detections.isEmpty()) {
+        return AutomaticBarPathResult(currentPaths, null, 0, 0f)
+    }
+
+    // SINGLE detection processing for maximum speed
+    val detection = detections.first()
+    val centerX = (detection.bbox.left + detection.bbox.right) / 2f
+    val centerY = (detection.bbox.top + detection.bbox.bottom) / 2f
+    val newPoint = PathPoint(centerX, centerY, currentTime)
+
+    var workingPaths = currentPaths.toMutableList()
+    var activePath = workingPaths.lastOrNull() ?: BarPath().also { workingPaths.add(it) }
+
+    // FAST distance check using Manhattan distance (faster than Euclidean)
+    val shouldAddPoint = if (activePath.points.isEmpty()) {
+        true
+    } else {
+        val lastPoint = activePath.points.last()
+        val distance = abs(newPoint.x - lastPoint.x) + abs(newPoint.y - lastPoint.y)
+        distance > minThreshold
+    }
+
+    if (!shouldAddPoint) {
+        return AutomaticBarPathResult(workingPaths, null, 0, 0f)
+    }
+
+    // ADD point with immediate aggressive trimming
+    activePath.addPoint(newPoint, maxPoints)
+
+    if (activePath.points.size > maxPoints) {
+        val keepCount = maxPoints * 2 / 3
+        val trimmedPoints = activePath.points.takeLast(keepCount)
+        activePath.points.clear()
+        activePath.points.addAll(trimmedPoints)
+    }
+
+    // FAST analysis using optimized functions
+    val movement = fastAnalyzeMovement(activePath.points)
+    val totalReps = fastRepCount(activePath.points)
+    val totalDistance = activePath.getTotalDistance()
+
+    return AutomaticBarPathResult(workingPaths, movement, totalReps, totalDistance)
+}
+
+// ULTRA-FAST movement analysis
+private fun fastAnalyzeMovement(points: List<PathPoint>): MovementAnalysis? {
+    if (points.size < 3) return null
+
+    val recent = points.takeLast(4) // Minimal analysis window
+    if (recent.size < 2) return null
+
+    val verticalChange = recent.last().y - recent.first().y
+    val timeSpan = (recent.last().timestamp - recent.first().timestamp) / 1000f
+
+    val direction = when {
+        verticalChange > 0.02f -> MovementDirection.DOWN
+        verticalChange < -0.02f -> MovementDirection.UP
+        else -> MovementDirection.STABLE
+    }
+
+    val velocity = if (timeSpan > 0) abs(verticalChange) / timeSpan else 0f
+    val totalDistance = recent.zipWithNext { a, b -> a.distanceTo(b) }.sum()
+
+    return MovementAnalysis(
+        direction = direction,
+        velocity = velocity,
+        acceleration = 0f,
+        totalDistance = totalDistance,
+        repCount = 0
+    )
+}
+
+// ULTRA-FAST rep counting with achievable thresholds
+private fun fastRepCount(points: List<PathPoint>): Int {
+    if (points.size < 8) return 0
+
+    var repCount = 0
+    var isInRep = false
+    var startY: Float? = null
+    var peakY: Float? = null
+
+    val minMovement = 0.05f // REDUCED threshold - only 5% of screen
+    val step = 2 // Process every 2nd point for maximum speed
+
+    for (i in step until points.size step step) {
+        val currentY = points[i].y
+
+        // SIMPLE direction calculation using just 2 points
+        val prevY = points[maxOf(0, i - step)].y
+        val direction = when {
+            currentY - prevY > 0.008f -> MovementDirection.DOWN
+            currentY - prevY < -0.008f -> MovementDirection.UP
+            else -> MovementDirection.STABLE
+        }
+
+        when {
+            // START rep: detect upward movement
+            !isInRep && direction == MovementDirection.UP -> {
+                isInRep = true
+                startY = currentY
+                peakY = currentY
+            }
+
+            // TRACK peak position
+            isInRep && currentY > (peakY ?: 0f) -> {
+                peakY = currentY
+            }
+
+            // COMPLETE rep: downward movement with sufficient range
+            isInRep && direction == MovementDirection.DOWN && peakY != null && startY != null -> {
+                val totalMovement = peakY!! - startY!!
+                val returnedToStart = currentY <= startY!! + (totalMovement * 0.4f) // Very forgiving
+
+                if (totalMovement >= minMovement && returnedToStart) {
+                    repCount++
+                    isInRep = false
+                    Log.d("FastRep", "⚡ FAST REP! Count: $repCount, Movement: ${String.format("%.3f", totalMovement)}")
+                    startY = currentY
+                    peakY = null
+                }
+            }
+        }
+    }
+
+    return repCount
+}
+
+// Generate different colors for path segments
+private fun getPathColor(pathIndex: Int): Color {
+    val colors = listOf(
+        Color.Cyan,
+        Color.Yellow,
+        Color.Green,
+        Color.Magenta,
+        Color.Red,
+        Color.Blue
+    )
+    return colors[pathIndex % colors.size]
+}
+
+// Enhanced drawing for automatic paths with fade effects
+private fun DrawScope.drawAutomaticBarPaths(paths: List<BarPath>) {
+    val canvasWidth = size.width
+    val canvasHeight = size.height
+    val currentTime = System.currentTimeMillis()
+
+    paths.forEachIndexed { pathIndex, path ->
+        val points = path.points
+        if (points.size > 1) {
+
+            // Draw path with time-based fade effect
+            for (i in 0 until points.size - 1) {
+                val startPoint = points[i]
+                val endPoint = points[i + 1]
+
+                val startX = startPoint.x * canvasWidth
+                val startY = startPoint.y * canvasHeight
+                val endX = endPoint.x * canvasWidth
+                val endY = endPoint.y * canvasHeight
+
+                // Time-based alpha (newer points are more opaque)
+                val timeSincePoint = currentTime - endPoint.timestamp
+                val maxAge = 10000L // 10 seconds
+                val alpha = (1f - (timeSincePoint.toFloat() / maxAge)).coerceIn(0.3f, 1f)
+
+                // Position-based alpha (recent points in sequence)
+                val positionAlpha = (i.toFloat() / points.size) * 0.7f + 0.3f
+                val finalAlpha = alpha * positionAlpha
+
+                drawLine(
+                    color = path.color.copy(alpha = finalAlpha),
+                    start = Offset(startX, startY),
+                    end = Offset(endX, endY),
+                    strokeWidth = 4.dp.toPx(),
+                    pathEffect = if (pathIndex == paths.size - 1) {
+                        null // Solid line for current path
+                    } else {
+                        PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f) // Dashed for older paths
+                    }
+                )
+            }
+
+            // Draw key points with enhanced visibility
+            points.forEachIndexed { index, point ->
+                val pointX = point.x * canvasWidth
+                val pointY = point.y * canvasHeight
+
+                val timeSincePoint = currentTime - point.timestamp
+                val alpha = (1f - (timeSincePoint.toFloat() / 15000L)).coerceIn(0.2f, 1f)
+
+                if (index == points.size - 1) {
+                    // Current point - larger and pulsing
+                    drawCircle(
+                        color = Color.White,
+                        radius = 12.dp.toPx(),
+                        center = Offset(pointX, pointY)
+                    )
+                    drawCircle(
+                        color = path.color,
+                        radius = 8.dp.toPx(),
+                        center = Offset(pointX, pointY)
+                    )
+                } else if (index % 10 == 0) {
+                    // Key points every 10th point
+                    drawCircle(
+                        color = path.color.copy(alpha = alpha),
+                        radius = 6.dp.toPx(),
+                        center = Offset(pointX, pointY)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Optimized detection drawing
 private fun DrawScope.drawDetections(
     detections: List<Detection>,
     detector: YOLOv11ObjectDetector
@@ -593,63 +859,46 @@ private fun DrawScope.drawDetections(
     val canvasWidth = size.width
     val canvasHeight = size.height
 
-    Log.d("DrawDetections", "Canvas size: ${canvasWidth}x${canvasHeight}, detections: ${detections.size}")
-
     detections.forEachIndexed { index, detection ->
         val bbox = detection.bbox
 
-        // Log the original normalized coordinates
-        Log.d("DrawDetections", "Detection $index: Normalized bbox: left=${bbox.left}, top=${bbox.top}, right=${bbox.right}, bottom=${bbox.bottom}, conf=${detection.score}")
-
-        // Convert normalized coordinates to pixel coordinates with bounds checking
         val left = (bbox.left * canvasWidth).coerceIn(0f, canvasWidth)
         val top = (bbox.top * canvasHeight).coerceIn(0f, canvasHeight)
         val right = (bbox.right * canvasWidth).coerceIn(0f, canvasWidth)
         val bottom = (bbox.bottom * canvasHeight).coerceIn(0f, canvasHeight)
 
-        // Log the pixel coordinates
-        Log.d("DrawDetections", "Detection $index: Pixel bbox: left=$left, top=$top, right=$right, bottom=$bottom")
-
-        // Calculate center point
         val centerX = (left + right) / 2f
         val centerY = (top + bottom) / 2f
 
-        // Always draw center point first (even if box is tiny)
+        // Center point
         drawCircle(
             color = Color.White,
-            radius = 2.dp.toPx(),
+            radius = 3.dp.toPx(),
             center = Offset(centerX, centerY)
         )
 
-        Log.d("DrawDetections", "Detection $index: Drawing center at: ($centerX, $centerY)")
-
-        // Only draw bounding box if it has reasonable dimensions
         if (right > left + 10f && bottom > top + 10f) {
-            // Draw bounding box with very thick stroke
             drawRect(
                 color = Color.Green,
                 topLeft = Offset(left, top),
-                size = Size(right - left, bottom - top),
-                style = Stroke(width = 1.dp.toPx())
+                size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                style = Stroke(width = 2.dp.toPx())
             )
 
-            // Draw confidence score with background
             val label = "${detector.getClassLabel(detection.classId)}: ${String.format("%.2f", detection.score)}"
-            val textSize = 18.sp.toPx()
+            val textSize = 16.sp.toPx()
             val textPadding = 8.dp.toPx()
 
-            // Calculate label position (prefer above box, but use below if near top)
             val labelTop = if (top > textSize + textPadding * 2f) {
                 top - textSize - textPadding * 2f
             } else {
                 bottom + textPadding
             }
 
-            // Draw label text
             drawContext.canvas.nativeCanvas.apply {
                 val paint = android.graphics.Paint().apply {
                     color = Color.Green.toArgb()
-                    this.textSize = 22.sp.toPx()
+                    this.textSize = 20.sp.toPx()
                     isAntiAlias = true
                     isFakeBoldText = true
                 }
@@ -661,9 +910,6 @@ private fun DrawScope.drawDetections(
                 )
             }
         } else {
-            Log.w("DrawDetections", "Detection $index: Box too small or invalid - left=$left, top=$top, right=$right, bottom=$bottom")
-
-            // Draw a large circle around tiny detections
             drawCircle(
                 color = Color.Green,
                 radius = 40.dp.toPx(),
@@ -674,247 +920,17 @@ private fun DrawScope.drawDetections(
     }
 }
 
-private fun DrawScope.drawBarPaths(paths: List<BarPath>) {
-    val canvasWidth = size.width
-    val canvasHeight = size.height
-
-    Log.d("DrawBarPaths", "Drawing ${paths.size} paths, canvas: ${canvasWidth}x${canvasHeight}")
-
-    paths.forEachIndexed { pathIndex, path ->
-        val points = path.points
-        Log.d("DrawBarPaths", "Path $pathIndex has ${points.size} points")
-
-        if (points.size > 1) {
-            // Draw path line with thicker stroke
-            for (i in 0 until points.size - 1) {
-                val startPoint = points[i]
-                val endPoint = points[i + 1]
-
-                val startX = startPoint.x * canvasWidth
-                val startY = startPoint.y * canvasHeight
-                val endX = endPoint.x * canvasWidth
-                val endY = endPoint.y * canvasHeight
-
-                Log.d("DrawBarPaths", "Drawing line from ($startX, $startY) to ($endX, $endY)")
-
-                drawLine(
-                    color = path.color,
-                    start = Offset(startX, startY),
-                    end = Offset(endX, endY),
-                    strokeWidth = 5.dp.toPx(), // Thicker line
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), 0f)
-                )
-            }
-
-            // Draw path points with fade effect (larger points)
-            points.forEachIndexed { index, point ->
-                val alpha = (index.toFloat() / points.size) * 0.8f + 0.2f
-                val pointX = point.x * canvasWidth
-                val pointY = point.y * canvasHeight
-
-                drawCircle(
-                    color = path.color.copy(alpha = alpha),
-                    radius = 8.dp.toPx(), // Larger points
-                    center = Offset(pointX, pointY)
-                )
-            }
-        } else if (points.size == 1) {
-            // Draw single point if we only have one
-            val point = points[0]
-            val pointX = point.x * canvasWidth
-            val pointY = point.y * canvasHeight
-
-            Log.d("DrawBarPaths", "Drawing single point at ($pointX, $pointY)")
-
-            drawCircle(
-                color = path.color,
-                radius = 10.dp.toPx(),
-                center = Offset(pointX, pointY)
-            )
-        }
-    }
-}
-
-// Data class for bar path processing results
-data class BarPathResult(
-    val paths: List<BarPath>,
-    val movement: MovementAnalysis?,
-    val repCount: Int
-)
-
-// Keep existing helper functions (processBarPath, analyzeMovement, countReps, etc.)
-private fun processBarPath(
-    detections: List<Detection>,
-    currentPaths: List<BarPath>,
-    maxPoints: Int,
-    minThreshold: Float
-): BarPathResult {
-    Log.d("BarPath", "processBarPath called - detections: ${detections.size}, currentPaths: ${currentPaths.size}")
-
-    if (detections.isEmpty()) {
-        Log.d("BarPath", "No detections, returning current state")
-        return BarPathResult(currentPaths, null, 0)
-    }
-
-    // Get the center point of the first (most confident) detection
-    val detection = detections.first()
-    val centerX = (detection.bbox.left + detection.bbox.right) / 2f
-    val centerY = (detection.bbox.top + detection.bbox.bottom) / 2f
-    val currentTime = System.currentTimeMillis()
-
-    val newPoint = PathPoint(centerX, centerY, currentTime)
-    Log.d("BarPath", "New point: ($centerX, $centerY) at time $currentTime")
-
-    // Get the current active path
-    val activePath = currentPaths.lastOrNull() ?: BarPath()
-
-    // Check if this is a significant movement
-    val shouldAddPoint = if (activePath.points.isEmpty()) {
-        Log.d("BarPath", "First point in path")
-        true
-    } else {
-        val lastPoint = activePath.points.last()
-        val distance = newPoint.distanceTo(lastPoint)
-        Log.d("BarPath", "Distance from last point: $distance, threshold: $minThreshold")
-        distance > minThreshold
-    }
-
-    if (!shouldAddPoint) {
-        Log.d("BarPath", "Movement too small, not adding point")
-        return BarPathResult(currentPaths, null, 0)
-    }
-
-    // Add point to active path
-    activePath.addPoint(newPoint, maxPoints)
-    Log.d("BarPath", "Added point to path, now has ${activePath.points.size} points")
-
-    // Update paths list
-    val updatedPaths = if (currentPaths.isEmpty()) {
-        listOf(activePath)
-    } else {
-        currentPaths.dropLast(1) + activePath
-    }
-
-    // Analyze movement
-    val movement = analyzeMovement(activePath.points)
-
-    // Count reps
-    val repCount = countReps(activePath.points)
-
-    Log.d("BarPath", "Bar path updated - Points: ${activePath.points.size}, Reps: $repCount")
-
-    return BarPathResult(updatedPaths, movement, repCount)
-}
-
-// Function to analyze movement direction and velocity
-private fun analyzeMovement(points: List<PathPoint>): MovementAnalysis? {
-    if (points.size < 5) return null
-
-    val recentPoints = points.takeLast(10)
-    val totalVerticalMovement = recentPoints.zipWithNext { a, b -> b.y - a.y }.sum()
-    val totalTime = recentPoints.last().timestamp - recentPoints.first().timestamp
-
-    val velocity = if (totalTime > 0) abs(totalVerticalMovement) / (totalTime / 1000f) else 0f
-
-    val direction = when {
-        totalVerticalMovement > 0.02f -> MovementDirection.DOWN
-        totalVerticalMovement < -0.02f -> MovementDirection.UP
-        else -> MovementDirection.STABLE
-    }
-
-    val totalDistance = points.zipWithNext { a, b -> a.distanceTo(b) }.sum()
-
-    return MovementAnalysis(
-        direction = direction,
-        velocity = velocity,
-        acceleration = 0f,
-        totalDistance = totalDistance,
-        repCount = 0
-    )
-}
-
-// Function to count reps based on direction changes
-private fun countReps(points: List<PathPoint>): Int {
-    if (points.size < 20) return 0
-
-    var repCount = 0
-    var lastDirection: MovementDirection? = null
-    var inUpPhase = false
-    val smoothingWindow = 5
-    val repThreshold = 0.05f // Minimum vertical displacement for a rep
-
-    for (i in smoothingWindow until points.size - smoothingWindow) {
-        val beforeY = points.subList(i - smoothingWindow, i).map { it.y }.average().toFloat()
-        val afterY = points.subList(i, i + smoothingWindow).map { it.y }.average().toFloat()
-
-        val currentDirection = when {
-            afterY - beforeY > 0.02f -> MovementDirection.DOWN
-            afterY - beforeY < -0.02f -> MovementDirection.UP
-            else -> MovementDirection.STABLE
-        }
-
-        // Detect rep completion: UP -> DOWN transition with sufficient displacement
-        if (lastDirection == MovementDirection.UP && currentDirection == MovementDirection.DOWN && inUpPhase) {
-            val upStartIndex = findLastDirectionChange(points, i, MovementDirection.DOWN, MovementDirection.UP, smoothingWindow)
-            if (upStartIndex != -1) {
-                val displacement = abs(points[i].y - points[upStartIndex].y)
-                if (displacement > repThreshold) {
-                    repCount++
-                    inUpPhase = false
-                    Log.d("RepCounter", "Rep detected! Count: $repCount, Displacement: $displacement")
-                }
-            }
-        }
-
-        // Start tracking up phase
-        if (lastDirection == MovementDirection.DOWN && currentDirection == MovementDirection.UP) {
-            inUpPhase = true
-        }
-
-        if (currentDirection != MovementDirection.STABLE) {
-            lastDirection = currentDirection
-        }
-    }
-
-    return repCount
-}
-
-// Helper function to find the last direction change
-private fun findLastDirectionChange(
-    points: List<PathPoint>,
-    currentIndex: Int,
-    fromDirection: MovementDirection,
-    toDirection: MovementDirection,
-    smoothingWindow: Int
-): Int {
-    for (i in currentIndex - 1 downTo smoothingWindow) {
-        val beforeY = points.subList(i - smoothingWindow, i).map { it.y }.average().toFloat()
-        val afterY = points.subList(i, i + smoothingWindow).map { it.y }.average().toFloat()
-
-        val direction = when {
-            afterY - beforeY > 0.02f -> MovementDirection.DOWN
-            afterY - beforeY < -0.02f -> MovementDirection.UP
-            else -> MovementDirection.STABLE
-        }
-
-        if (direction == fromDirection) {
-            return i
-        }
-    }
-    return -1
-}
-
 @Composable
-private fun EnhancedInfoPanel(
+private fun AutomaticInfoPanel(
     detections: List<Detection>,
     fps: Float,
     isProcessing: Boolean,
     currentMovement: MovementAnalysis?,
     repCount: Int,
-    isRecording: Boolean,
+    totalDistance: Float,
+    activeTrackingSession: Boolean,
     isGeneratingReport: Boolean,
-    onStartStopRecording: () -> Unit,
-    onClearPath: () -> Unit,
+    onClearPaths: () -> Unit,
     onGenerateExcelReport: () -> Unit,
     onGenerateCSVReport: () -> Unit,
     modifier: Modifier = Modifier
@@ -922,119 +938,124 @@ private fun EnhancedInfoPanel(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 60.dp)
+            .padding(top = 50.dp)
     ) {
         Column(
             modifier = Modifier.align(Alignment.TopCenter),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = "Bar Path Detector Pro",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Control buttons row 1
+            // App title with automatic indicator
             Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(horizontal = 8.dp)
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
-                Button(
-                    onClick = onStartStopRecording,
-                    modifier = Modifier.height(28.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRecording) Color.Red else Color.Green
-                    )
-                ) {
+                Text(
+                    text = "⚡ High-FPS Bar Tracker",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                if (activeTrackingSession) {
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isRecording) "Stop" else "Start",
-                        fontSize = 10.sp,
-                        color = Color.White
+                        text = "●",
+                        color = Color.Red,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
                     )
-                }
-                Button(
-                    onClick = onClearPath,
-                    modifier = Modifier.height(28.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Blue)
-                ) {
-                    Text("Clear", fontSize = 10.sp, color = Color.White)
                 }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Report generation buttons row 2
-            AnimatedVisibility(visible = repCount > 0) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.padding(horizontal = 8.dp)
+            // Control buttons
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 8.dp)
+            ) {
+                Button(
+                    onClick = onClearPaths,
+                    modifier = Modifier.height(32.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
                 ) {
-                    Button(
-                        onClick = onGenerateExcelReport,
-                        enabled = !isGeneratingReport && repCount > 0,
-                        modifier = Modifier.height(28.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF007ACC),
-                            disabledContainerColor = Color.Gray
-                        )
-                    ) {
-                        Text(
-                            text = if (isGeneratingReport) "..." else "📊 Excel",
-                            fontSize = 10.sp,
-                            color = Color.White
-                        )
-                    }
-                    Button(
-                        onClick = onGenerateCSVReport,
-                        enabled = !isGeneratingReport && repCount > 0,
-                        modifier = Modifier.height(28.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF228B22),
-                            disabledContainerColor = Color.Gray
-                        )
-                    ) {
-                        Text(
-                            text = if (isGeneratingReport) "..." else "📋 CSV",
-                            fontSize = 10.sp,
-                            color = Color.White
-                        )
+                    Text("🗑️ Clear", fontSize = 11.sp, color = Color.White)
+                }
+
+                // Report generation buttons
+                AnimatedVisibility(visible = repCount > 0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = onGenerateExcelReport,
+                            enabled = !isGeneratingReport,
+                            modifier = Modifier.height(32.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF007ACC),
+                                disabledContainerColor = Color.Gray
+                            )
+                        ) {
+                            Text(
+                                text = if (isGeneratingReport) "..." else "📊 Excel",
+                                fontSize = 11.sp,
+                                color = Color.White
+                            )
+                        }
+                        Button(
+                            onClick = onGenerateCSVReport,
+                            enabled = !isGeneratingReport,
+                            modifier = Modifier.height(32.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF228B22),
+                                disabledContainerColor = Color.Gray
+                            )
+                        ) {
+                            Text(
+                                text = if (isGeneratingReport) "..." else "📋 CSV",
+                                fontSize = 11.sp,
+                                color = Color.White
+                            )
+                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Status info
+            // Status information
             Text(
-                text = "FPS: ${String.format("%.1f", fps)}",
-                color = Color.White,
-                fontSize = 11.sp,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "Detections: ${detections.size}",
-                color = Color.White,
-                fontSize = 11.sp,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "Recording: ${if (isRecording) "ON" else "OFF"}",
-                color = if (isRecording) Color.Green else Color.Gray,
-                fontSize = 11.sp,
+                text = "Auto Mode: ${if (activeTrackingSession) "TRACKING" else "STANDBY"}",
+                color = if (activeTrackingSession) Color.Green else Color.Yellow,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
+
             Text(
-                text = "Reps: $repCount",
-                color = Color.Cyan,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
+                text = "FPS: ${String.format("%.1f", fps)} | Detections: ${detections.size}",
+                color = Color.White,
+                fontSize = 10.sp,
                 textAlign = TextAlign.Center
             )
+
+            // Main metrics
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(vertical = 4.dp)
+            ) {
+                Text(
+                    text = "Reps: $repCount",
+                    color = Color.Cyan,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Distance: ${String.format("%.2f", totalDistance)}",
+                    color = Color.Yellow,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
             if (isGeneratingReport) {
                 Text(
@@ -1049,40 +1070,51 @@ private fun EnhancedInfoPanel(
             // Movement analysis
             currentMovement?.let { movement ->
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Movement: ${movement.direction}",
-                    color = when (movement.direction) {
-                        MovementDirection.UP -> Color.Green
-                        MovementDirection.DOWN -> Color.Red
-                        MovementDirection.STABLE -> Color.Yellow
-                    },
-                    fontSize = 11.sp,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "Velocity: ${String.format("%.2f", movement.velocity)}",
-                    color = Color.White,
-                    fontSize = 9.sp,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "Distance: ${String.format("%.2f", movement.totalDistance)}",
-                    color = Color.White,
-                    fontSize = 9.sp,
-                    textAlign = TextAlign.Center
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
+                    Text(
+                        text = "${movement.direction}",
+                        color = when (movement.direction) {
+                            MovementDirection.UP -> Color.Green
+                            MovementDirection.DOWN -> Color.Red
+                            MovementDirection.STABLE -> Color.Yellow
+                        },
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "V: ${String.format("%.2f", movement.velocity)}",
+                        color = Color.White,
+                        fontSize = 10.sp
+                    )
+                }
             }
 
+            // Detection details
             if (detections.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                detections.take(2).forEachIndexed { index, detection ->
+                Spacer(modifier = Modifier.height(4.dp))
+                detections.take(1).forEachIndexed { index, detection ->
                     Text(
-                        text = "Barbell ${index + 1}: ${String.format("%.2f", detection.score)}",
+                        text = "Barbell Conf: ${String.format("%.2f", detection.score)}",
                         color = Color.Cyan,
-                        fontSize = 9.sp,
+                        fontSize = 10.sp,
                         textAlign = TextAlign.Center
                     )
                 }
+            }
+
+            // Instructions for automatic mode
+            if (!activeTrackingSession && repCount == 0) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Point camera at barbell to start automatic tracking",
+                    color = Color.Gray,
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
             }
         }
     }

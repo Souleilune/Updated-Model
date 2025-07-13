@@ -17,8 +17,8 @@ import java.util.*
 
 /**
  * Android-compatible report generator for bar path analysis
- * Supports both Excel (.xlsx) and CSV formats
- * FIXED: Removed autoSizeColumn() calls that cause crashes on Android
+ * Compatible with existing BarPathAnalyzer and BarPath classes
+ * FIXED: Removed autoSizeColumn() calls and unresolved method references
  */
 class ReportGenerator(private val context: Context) {
 
@@ -36,6 +36,15 @@ class ReportGenerator(private val context: Context) {
         val sessionNotes: String = ""
     )
 
+    // Simple metrics data class compatible with current analyzer
+    data class SimpleMetrics(
+        val totalReps: Int,
+        val averageRepTime: Float,
+        val averageRangeOfMotion: Float,
+        val barPathDeviation: Float,
+        val consistencyScore: Float
+    )
+
     /**
      * Generate comprehensive Excel report (Android-compatible)
      */
@@ -46,12 +55,15 @@ class ReportGenerator(private val context: Context) {
         return try {
             val workbook = XSSFWorkbook()
 
+            // Calculate metrics using our own methods
+            val metrics = calculateSimpleMetrics(session.paths, analyzer)
+
             // Create multiple sheets for comprehensive analysis
-            createSummarySheet(workbook, session, analyzer)
+            createSummarySheet(workbook, session, metrics)
             createDetailedPathSheet(workbook, session)
             createMovementAnalysisSheet(workbook, session)
             createRepAnalysisSheet(workbook, session, analyzer)
-            createStatisticsSheet(workbook, session, analyzer)
+            createStatisticsSheet(workbook, session, metrics)
 
             // Save to file
             val file = saveWorkbookToFile(workbook, "barpath_report")
@@ -86,8 +98,8 @@ class ReportGenerator(private val context: Context) {
             csv.appendLine("Total Reps: ${session.totalReps}")
             csv.appendLine("")
 
-            // Lifting metrics
-            val metrics = analyzer.calculateLiftingMetrics(session.paths)
+            // Lifting metrics using our simplified calculation
+            val metrics = calculateSimpleMetrics(session.paths, analyzer)
             csv.appendLine("LIFTING METRICS")
             csv.appendLine("Metric,Value")
             csv.appendLine("Total Reps,${metrics.totalReps}")
@@ -120,10 +132,78 @@ class ReportGenerator(private val context: Context) {
         }
     }
 
+    /**
+     * Calculate simplified metrics compatible with current BarPathAnalyzer
+     */
+    private fun calculateSimpleMetrics(paths: List<BarPath>, analyzer: BarPathAnalyzer): SimpleMetrics {
+        if (paths.isEmpty()) {
+            return SimpleMetrics(0, 0f, 0f, 0f, 0f)
+        }
+
+        // Calculate total reps across all paths
+        val totalReps = paths.map { path ->
+            if (path.points.size > 20) {
+                val analysis = analyzer.analyzeMovement(path.points)
+                analysis?.repCount ?: 0
+            } else 0
+        }.sum()
+
+        // Calculate average rep time
+        val totalDuration = paths.map { it.getDuration() }.sum() / 1000f // Convert to seconds
+        val averageRepTime = if (totalReps > 0) totalDuration / totalReps else 0f
+
+        // Calculate average range of motion
+        val ranges = paths.map { it.getVerticalRange() }.filter { it > 0f }
+        val averageRangeOfMotion = if (ranges.isNotEmpty()) ranges.average().toFloat() else 0f
+
+        // Calculate bar path deviation
+        val deviations = paths.map { calculatePathDeviation(it.points) }.filter { it > 0f }
+        val barPathDeviation = if (deviations.isNotEmpty()) deviations.average().toFloat() else 0f
+
+        // Calculate consistency score
+        val consistencyScore = calculateConsistencyScore(paths)
+
+        return SimpleMetrics(
+            totalReps = totalReps,
+            averageRepTime = averageRepTime,
+            averageRangeOfMotion = averageRangeOfMotion,
+            barPathDeviation = barPathDeviation,
+            consistencyScore = consistencyScore
+        )
+    }
+
+    private fun calculateConsistencyScore(paths: List<BarPath>): Float {
+        if (paths.size < 2) return 1f
+
+        val pathCharacteristics = paths.map { path ->
+            listOf(
+                path.getVerticalRange(),
+                path.getTotalDistance(),
+                calculatePathDeviation(path.points)
+            )
+        }
+
+        if (pathCharacteristics.isEmpty()) return 1f
+
+        val consistencyScores = (0..2).map { index ->
+            val values = pathCharacteristics.map { it[index] }.filter { it > 0f }
+            if (values.isEmpty()) return@map 1f
+
+            val mean = values.average()
+            val variance = values.map { (it - mean) * (it - mean) }.average()
+            val stdDev = kotlin.math.sqrt(variance)
+
+            val coefficientOfVariation = if (mean > 0) stdDev / mean else 0.0
+            kotlin.math.max(0f, 1f - coefficientOfVariation.toFloat())
+        }
+
+        return consistencyScores.average().toFloat()
+    }
+
     private fun createSummarySheet(
         workbook: XSSFWorkbook,
         session: WorkoutSession,
-        analyzer: BarPathAnalyzer
+        metrics: SimpleMetrics
     ) {
         val sheet = workbook.createSheet("Summary")
         val headerStyle = createHeaderStyle(workbook)
@@ -163,8 +243,7 @@ class ReportGenerator(private val context: Context) {
 
         rowNum++ // Empty row
 
-        // Lifting metrics
-        val metrics = analyzer.calculateLiftingMetrics(session.paths)
+        // Lifting metrics using our simplified metrics
         val metricsHeaderRow = sheet.createRow(rowNum++)
         val metricsHeaderCell = metricsHeaderRow.createCell(0)
         metricsHeaderCell.setCellValue("LIFTING METRICS")
@@ -184,8 +263,7 @@ class ReportGenerator(private val context: Context) {
             row.createCell(1).apply { setCellValue(data[1]); cellStyle = dataStyle }
         }
 
-        // REMOVED: Auto-size columns (causes Android crashes)
-        // Manual column sizing instead
+        // Manual column sizing (Android-compatible)
         sheet.setColumnWidth(0, 6000) // Column A
         sheet.setColumnWidth(1, 4000) // Column B
         sheet.setColumnWidth(2, 3000) // Column C
@@ -261,12 +339,12 @@ class ReportGenerator(private val context: Context) {
                 val row = sheet.createRow(rowNum++)
 
                 row.createCell(0).apply { setCellValue((pathIndex + 1).toDouble()); cellStyle = dataStyle }
-                row.createCell(1).apply { setCellValue(analysis.direction.toString()); cellStyle = dataStyle }
-                row.createCell(2).apply { setCellValue(analysis.velocity.toDouble()); cellStyle = dataStyle }
-                row.createCell(3).apply { setCellValue(analysis.acceleration.toDouble()); cellStyle = dataStyle }
-                row.createCell(4).apply { setCellValue(analysis.totalDistance.toDouble()); cellStyle = dataStyle }
-                row.createCell(5).apply { setCellValue(analysis.peakVelocity.toDouble()); cellStyle = dataStyle }
-                row.createCell(6).apply { setCellValue(analysis.averageBarSpeed.toDouble()); cellStyle = dataStyle }
+                row.createCell(1).apply { setCellValue(analysis?.direction?.toString() ?: "STABLE"); cellStyle = dataStyle }
+                row.createCell(2).apply { setCellValue((analysis?.velocity ?: 0f).toDouble()); cellStyle = dataStyle }
+                row.createCell(3).apply { setCellValue((analysis?.acceleration ?: 0f).toDouble()); cellStyle = dataStyle }
+                row.createCell(4).apply { setCellValue((analysis?.totalDistance ?: 0f).toDouble()); cellStyle = dataStyle }
+                row.createCell(5).apply { setCellValue((analysis?.peakVelocity ?: 0f).toDouble()); cellStyle = dataStyle }
+                row.createCell(6).apply { setCellValue((analysis?.averageBarSpeed ?: 0f).toDouble()); cellStyle = dataStyle }
             }
         }
 
@@ -318,7 +396,7 @@ class ReportGenerator(private val context: Context) {
         }
     }
 
-    private fun createStatisticsSheet(workbook: XSSFWorkbook, session: WorkoutSession, analyzer: BarPathAnalyzer) {
+    private fun createStatisticsSheet(workbook: XSSFWorkbook, session: WorkoutSession, metrics: SimpleMetrics) {
         val sheet = workbook.createSheet("Statistics")
         val headerStyle = createHeaderStyle(workbook)
         val dataStyle = createDataStyle(workbook)
@@ -327,7 +405,6 @@ class ReportGenerator(private val context: Context) {
 
         // Calculate comprehensive statistics
         val allPoints = session.paths.flatMap { it.points }
-        val metrics = analyzer.calculateLiftingMetrics(session.paths)
 
         val stats = mapOf(
             "Total Data Points" to allPoints.size.toString(),
@@ -395,7 +472,7 @@ class ReportGenerator(private val context: Context) {
         return paths.maxOfOrNull { it.getVerticalRange() } ?: 0f
     }
 
-    private fun calculateOverallQuality(metrics: LiftingMetrics): Float {
+    private fun calculateOverallQuality(metrics: SimpleMetrics): Float {
         return (metrics.consistencyScore * 0.4f +
                 kotlin.math.min(metrics.averageRangeOfMotion * 10f, 1f) * 0.3f +
                 kotlin.math.max(0f, 1f - metrics.barPathDeviation * 10f) * 0.3f)

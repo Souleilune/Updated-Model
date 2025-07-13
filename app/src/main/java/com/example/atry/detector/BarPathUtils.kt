@@ -4,7 +4,9 @@ import androidx.compose.ui.graphics.Color
 import kotlin.math.*
 
 /**
- * Utility classes and functions for bar path tracking and analysis
+ * Simplified Rep Counter based on vertical position changes
+ * Point A (bottom) -> Point B (top) -> Point A (bottom) = 1 Rep
+ * Much more practical and achievable for real lifting scenarios
  */
 
 data class PathPoint(
@@ -18,10 +20,6 @@ data class PathPoint(
 
     fun verticalDistanceTo(other: PathPoint): Float {
         return abs(y - other.y)
-    }
-
-    fun horizontalDistanceTo(other: PathPoint): Float {
-        return abs(x - other.x)
     }
 }
 
@@ -37,7 +35,7 @@ data class BarPath(
         fun generatePathId(): String = "path_${++pathCounter}"
     }
 
-    fun addPoint(point: PathPoint, maxPoints: Int = 500) {
+    fun addPoint(point: PathPoint, maxPoints: Int = 300) {
         points.add(point)
         if (points.size > maxPoints) {
             points.removeAt(0)
@@ -66,120 +64,152 @@ enum class MovementDirection {
     UP, DOWN, STABLE
 }
 
-data class MovementPhase(
-    val direction: MovementDirection,
-    val startPoint: PathPoint,
-    val endPoint: PathPoint?,
-    val maxDisplacement: Float = 0f
+enum class RepPhase {
+    AT_BOTTOM,    // Starting position (low Y value)
+    MOVING_UP,    // Moving from bottom to top
+    AT_TOP,       // Peak position (high Y value)
+    MOVING_DOWN,  // Moving from top back to bottom
+    COMPLETED     // Full rep completed
+}
+
+data class RepState(
+    var phase: RepPhase = RepPhase.AT_BOTTOM,
+    var startY: Float = 0f,
+    var peakY: Float = 0f,
+    var currentY: Float = 0f,
+    var lastDirection: MovementDirection = MovementDirection.STABLE,
+    var phaseStartTime: Long = 0L
 )
 
 data class MovementAnalysis(
     val direction: MovementDirection,
-    val velocity: Float, // pixels per second
+    val velocity: Float,
     val acceleration: Float = 0f,
     val totalDistance: Float,
     val repCount: Int,
-    val currentPhase: MovementPhase? = null,
+    val currentPhase: RepPhase = RepPhase.AT_BOTTOM,
     val averageBarSpeed: Float = 0f,
     val peakVelocity: Float = 0f
 )
 
-data class LiftingMetrics(
-    val totalReps: Int,
-    val averageRepTime: Float,
-    val averageRangeOfMotion: Float,
-    val barPathDeviation: Float, // How much the bar deviates from vertical
-    val consistencyScore: Float, // How consistent the movement pattern is
-    val phases: List<MovementPhase> = emptyList()
-)
-
 /**
- * Advanced bar path analyzer with comprehensive movement analysis
+ * Simplified Bar Path Analyzer focused on practical rep counting
+ * Much faster and more reliable than complex movement analysis
  */
-class BarPathAnalyzer(
-    private val smoothingWindow: Int = 5,
-    private val minRepDisplacement: Float = 0.08f, // Minimum vertical displacement for a rep
-    private val velocityThreshold: Float = 0.01f,
-    private val stableThreshold: Float = 0.005f
+class SimpleRepAnalyzer(
+    private val minVerticalMovement: Float = 0.08f,  // Minimum movement to count as rep (8% of screen)
+    private val stableThreshold: Float = 0.02f,      // Movement threshold for direction changes
+    private val smoothingWindow: Int = 3             // Small window for smoothing
 ) {
 
-    private var lastDirection: MovementDirection? = null
-    private var repPhases = mutableListOf<MovementPhase>()
-    private var currentPhase: MovementPhase? = null
+    private var repState = RepState()
+    private var totalReps = 0
 
-    fun analyzeMovement(points: List<PathPoint>): MovementAnalysis {
-        if (points.size < 3) {
-            return MovementAnalysis(
-                direction = MovementDirection.STABLE,
-                velocity = 0f,
-                totalDistance = 0f,
-                repCount = 0
-            )
-        }
+    companion object {
+        private const val TAG = "SimpleRepAnalyzer"
+    }
 
-        val smoothedPoints = applySmoothingFilter(points)
-        val direction = calculateDirection(smoothedPoints)
-        val velocity = calculateVelocity(smoothedPoints)
-        val acceleration = calculateAcceleration(smoothedPoints)
-        val totalDistance = calculateTotalDistance(smoothedPoints)
-        val repCount = countRepsAdvanced(smoothedPoints)
-        val averageSpeed = calculateAverageSpeed(smoothedPoints)
-        val peakVelocity = calculatePeakVelocity(smoothedPoints)
+    /**
+     * Simple and fast movement analysis
+     */
+    fun analyzeMovement(points: List<PathPoint>): MovementAnalysis? {
+        if (points.size < 5) return null
+
+        val direction = calculateSimpleDirection(points)
+        val velocity = calculateSimpleVelocity(points)
+        val totalDistance = calculateTotalDistance(points)
+        val repCount = countSimpleReps(points)
 
         return MovementAnalysis(
             direction = direction,
             velocity = velocity,
-            acceleration = acceleration,
             totalDistance = totalDistance,
             repCount = repCount,
-            currentPhase = currentPhase,
-            averageBarSpeed = averageSpeed,
-            peakVelocity = peakVelocity
+            currentPhase = repState.phase
         )
     }
 
-    fun calculateLiftingMetrics(paths: List<BarPath>): LiftingMetrics {
-        val allPoints = paths.flatMap { it.points }
-        if (allPoints.isEmpty()) {
-            return LiftingMetrics(0, 0f, 0f, 0f, 0f)
+    /**
+     * SIMPLE REP COUNTING: Bottom -> Top -> Bottom = 1 Rep
+     */
+    private fun countSimpleReps(points: List<PathPoint>): Int {
+        if (points.size < 10) return totalReps
+
+        val currentPoint = points.last()
+        val currentY = currentPoint.y
+        val currentTime = currentPoint.timestamp
+
+        // Get recent movement direction
+        val recentDirection = calculateSimpleDirection(points.takeLast(smoothingWindow))
+
+        // Update rep state based on vertical position and direction
+        when (repState.phase) {
+            RepPhase.AT_BOTTOM -> {
+                // Starting at bottom, wait for upward movement
+                if (recentDirection == MovementDirection.UP) {
+                    repState.phase = RepPhase.MOVING_UP
+                    repState.startY = currentY
+                    repState.phaseStartTime = currentTime
+                    android.util.Log.d(TAG, "Rep started: Moving up from Y=${String.format("%.3f", currentY)}")
+                }
+            }
+
+            RepPhase.MOVING_UP -> {
+                // Moving up, look for peak or direction change
+                if (recentDirection == MovementDirection.DOWN) {
+                    // Reached peak, now moving down
+                    if (currentY - repState.startY >= minVerticalMovement) {
+                        repState.phase = RepPhase.MOVING_DOWN
+                        repState.peakY = currentY
+                        android.util.Log.d(TAG, "Reached peak: Y=${String.format("%.3f", currentY)}, Range=${String.format("%.3f", currentY - repState.startY)}")
+                    } else {
+                        // Movement too small, reset
+                        repState.phase = RepPhase.AT_BOTTOM
+                        android.util.Log.d(TAG, "Movement too small, resetting")
+                    }
+                }
+            }
+
+            RepPhase.MOVING_DOWN -> {
+                // Moving down, check if we've returned close to starting position
+                val returnedToStart = currentY <= repState.startY + (minVerticalMovement * 0.3f)
+                val hasMinimumRange = repState.peakY - repState.startY >= minVerticalMovement
+
+                if (returnedToStart && hasMinimumRange) {
+                    // COMPLETED ONE REP!
+                    totalReps++
+                    repState.phase = RepPhase.AT_BOTTOM
+                    val repTime = (currentTime - repState.phaseStartTime) / 1000f
+                    android.util.Log.d(TAG, "🎯 REP COMPLETED! Total: $totalReps, Time: ${String.format("%.1f", repTime)}s, Range: ${String.format("%.3f", repState.peakY - repState.startY)}")
+
+                    // Reset for next rep
+                    repState.startY = currentY
+                }
+            }
+
+            else -> {
+                repState.phase = RepPhase.AT_BOTTOM
+            }
         }
 
-        val totalReps = countRepsAdvanced(allPoints)
-        val averageRepTime = calculateAverageRepTime(allPoints, totalReps)
-        val averageROM = calculateAverageRangeOfMotion(paths)
-        val pathDeviation = calculateBarPathDeviation(allPoints)
-        val consistency = calculateConsistencyScore(paths)
+        repState.currentY = currentY
+        repState.lastDirection = recentDirection
 
-        return LiftingMetrics(
-            totalReps = totalReps,
-            averageRepTime = averageRepTime,
-            averageRangeOfMotion = averageROM,
-            barPathDeviation = pathDeviation,
-            consistencyScore = consistency,
-            phases = repPhases.toList()
-        )
+        return totalReps
     }
 
-    private fun applySmoothingFilter(points: List<PathPoint>): List<PathPoint> {
-        if (points.size <= smoothingWindow * 2) return points
+    /**
+     * Simple direction calculation based on recent Y movement
+     */
+    private fun calculateSimpleDirection(points: List<PathPoint>): MovementDirection {
+        if (points.size < 2) return MovementDirection.STABLE
 
-        return points.mapIndexed { index, point ->
-            val start = maxOf(0, index - smoothingWindow / 2)
-            val end = minOf(points.size - 1, index + smoothingWindow / 2)
-            val windowPoints = points.subList(start, end + 1)
+        val recent = points.takeLast(minOf(smoothingWindow, points.size))
+        if (recent.size < 2) return MovementDirection.STABLE
 
-            val avgX = windowPoints.map { it.x }.average().toFloat()
-            val avgY = windowPoints.map { it.y }.average().toFloat()
-
-            PathPoint(avgX, avgY, point.timestamp)
-        }
-    }
-
-    private fun calculateDirection(points: List<PathPoint>): MovementDirection {
-        if (points.size < smoothingWindow) return MovementDirection.STABLE
-
-        val recent = points.takeLast(smoothingWindow)
-        val verticalChange = recent.last().y - recent.first().y
+        val startY = recent.first().y
+        val endY = recent.last().y
+        val verticalChange = endY - startY
 
         return when {
             verticalChange > stableThreshold -> MovementDirection.DOWN
@@ -188,181 +218,122 @@ class BarPathAnalyzer(
         }
     }
 
-    private fun calculateVelocity(points: List<PathPoint>): Float {
+    /**
+     * Simple velocity calculation
+     */
+    private fun calculateSimpleVelocity(points: List<PathPoint>): Float {
         if (points.size < 2) return 0f
 
-        val recent = points.takeLast(minOf(10, points.size))
+        val recent = points.takeLast(minOf(5, points.size))
         if (recent.size < 2) return 0f
 
-        val totalDisplacement = recent.zipWithNext { a, b -> a.distanceTo(b) }.sum()
+        val distance = recent.first().distanceTo(recent.last())
         val timeSpan = (recent.last().timestamp - recent.first().timestamp) / 1000f
 
-        return if (timeSpan > 0) totalDisplacement / timeSpan else 0f
-    }
-
-    private fun calculateAcceleration(points: List<PathPoint>): Float {
-        if (points.size < 3) return 0f
-
-        val velocities = mutableListOf<Float>()
-        for (i in 1 until points.size) {
-            val displacement = points[i].distanceTo(points[i-1])
-            val timeSpan = (points[i].timestamp - points[i-1].timestamp) / 1000f
-            if (timeSpan > 0) {
-                velocities.add(displacement / timeSpan)
-            }
-        }
-
-        if (velocities.size < 2) return 0f
-
-        val recentVelocities = velocities.takeLast(5)
-        val velocityChange = recentVelocities.last() - recentVelocities.first()
-        val timeSpan = recentVelocities.size * 0.1f // Assuming ~10 FPS
-
-        return velocityChange / timeSpan
+        return if (timeSpan > 0) distance / timeSpan else 0f
     }
 
     private fun calculateTotalDistance(points: List<PathPoint>): Float {
         return points.zipWithNext { a, b -> a.distanceTo(b) }.sum()
     }
 
-    private fun countRepsAdvanced(points: List<PathPoint>): Int {
-        if (points.size < 20) return 0
+    /**
+     * Reset rep counter (useful for new sessions)
+     */
+    fun resetRepCounter() {
+        totalReps = 0
+        repState = RepState()
+        android.util.Log.d(TAG, "Rep counter reset")
+    }
 
-        var repCount = 0
-        var inRepPhase = false
-        var repStartY: Float? = null
-        var currentDirection: MovementDirection? = null
+    /**
+     * Get current rep progress info
+     */
+    fun getRepProgress(): RepProgress {
+        return RepProgress(
+            currentPhase = repState.phase,
+            verticalProgress = if (repState.phase != RepPhase.AT_BOTTOM) {
+                abs(repState.currentY - repState.startY) / minVerticalMovement
+            } else 0f,
+            isInRep = repState.phase != RepPhase.AT_BOTTOM
+        )
+    }
+}
 
-        val smoothed = applySmoothingFilter(points)
+data class RepProgress(
+    val currentPhase: RepPhase,
+    val verticalProgress: Float,  // 0.0 to 1.0+ (how much of minimum movement completed)
+    val isInRep: Boolean
+)
 
-        for (i in smoothingWindow until smoothed.size - smoothingWindow) {
-            // FIXED: Convert smoothingWindow to Int and ensure proper indexing
-            val prevY = smoothed.subList(i - smoothingWindow, i).map { it.y }.average()
-            val nextY = smoothed.subList(i, i + smoothingWindow).map { it.y }.average()
-            val displacement = nextY - prevY
+/**
+ * Enhanced Movement Analysis with simple rep counting
+ */
+data class LiftingMetrics(
+    val totalReps: Int,
+    val averageRepTime: Float,
+    val averageRangeOfMotion: Float,
+    val barPathDeviation: Float,
+    val consistencyScore: Float
+)
 
-            val direction = when {
-                displacement > stableThreshold -> MovementDirection.DOWN
-                displacement < -stableThreshold -> MovementDirection.UP
-                else -> MovementDirection.STABLE
-            }
+/**
+ * Lightweight bar path analyzer for mobile performance
+ */
+class BarPathAnalyzer {
+    private val repAnalyzer = SimpleRepAnalyzer()
 
-            // Detect phase transitions
-            if (currentDirection != direction && direction != MovementDirection.STABLE) {
-                when {
-                    // Starting upward phase (concentric)
-                    currentDirection == MovementDirection.DOWN && direction == MovementDirection.UP -> {
-                        if (!inRepPhase) {
-                            inRepPhase = true
-                            repStartY = smoothed[i].y
-                        }
-                    }
-                    // Completing downward phase (eccentric) - rep completed
-                    currentDirection == MovementDirection.UP && direction == MovementDirection.DOWN -> {
-                        if (inRepPhase && repStartY != null) {
-                            val totalDisplacement = abs(smoothed[i].y - repStartY!!)
-                            if (totalDisplacement > minRepDisplacement) {
-                                repCount++
+    fun analyzeMovement(points: List<PathPoint>): MovementAnalysis? {
+        return repAnalyzer.analyzeMovement(points)
+    }
 
-                                // Record the rep phase
-                                val repPhase = MovementPhase(
-                                    direction = MovementDirection.UP,
-                                    startPoint = PathPoint(0f, repStartY!!, 0L),
-                                    endPoint = smoothed[i],
-                                    maxDisplacement = totalDisplacement
-                                )
-                                repPhases.add(repPhase)
-                            }
-                            inRepPhase = false
-                            repStartY = null
-                        }
-                    }
-                }
-                currentDirection = direction
-            }
+    fun resetSession() {
+        repAnalyzer.resetRepCounter()
+    }
+
+    fun getRepProgress(): RepProgress {
+        return repAnalyzer.getRepProgress()
+    }
+
+    fun calculateLiftingMetrics(paths: List<BarPath>): LiftingMetrics {
+        if (paths.isEmpty()) {
+            return LiftingMetrics(0, 0f, 0f, 0f, 0f)
         }
 
-        return repCount
-    }
+        val totalReps = paths.map { path ->
+            if (path.points.size > 10) {
+                analyzeMovement(path.points)?.repCount ?: 0
+            } else 0
+        }.sum()
 
-    private fun calculateAverageSpeed(points: List<PathPoint>): Float {
-        if (points.size < 2) return 0f
+        val averageRepTime = if (totalReps > 0) {
+            val totalTime = paths.map { it.getDuration() }.sum() / 1000f
+            totalTime / totalReps
+        } else 0f
 
-        val totalDistance = calculateTotalDistance(points)
-        val totalTime = (points.last().timestamp - points.first().timestamp) / 1000f
+        val averageROM = paths.map { it.getVerticalRange() }.average().toFloat()
 
-        return if (totalTime > 0) totalDistance / totalTime else 0f
-    }
-
-    private fun calculatePeakVelocity(points: List<PathPoint>): Float {
-        if (points.size < 2) return 0f
-
-        var maxVelocity = 0f
-
-        for (i in 1 until points.size) {
-            val displacement = points[i].distanceTo(points[i-1])
-            val timeSpan = (points[i].timestamp - points[i-1].timestamp) / 1000f
-            if (timeSpan > 0) {
-                val velocity = displacement / timeSpan
-                maxVelocity = maxOf(maxVelocity, velocity)
+        val barPathDeviation = paths.map { path ->
+            if (path.points.isEmpty()) 0f else {
+                val centerX = path.points.map { it.x }.average().toFloat()
+                path.points.map { abs(it.x - centerX) }.average().toFloat()
             }
-        }
+        }.average().toFloat()
 
-        return maxVelocity
-    }
-
-    private fun calculateAverageRepTime(points: List<PathPoint>, repCount: Int): Float {
-        if (repCount == 0 || points.isEmpty()) return 0f
-
-        val totalTime = (points.last().timestamp - points.first().timestamp) / 1000f
-        return totalTime / repCount
-    }
-
-    private fun calculateAverageRangeOfMotion(paths: List<BarPath>): Float {
-        if (paths.isEmpty()) return 0f
-
-        val ranges = paths.map { it.getVerticalRange() }.filter { it > 0f }
-        return if (ranges.isNotEmpty()) ranges.average().toFloat() else 0f
-    }
-
-    private fun calculateBarPathDeviation(points: List<PathPoint>): Float {
-        if (points.isEmpty()) return 0f
-
-        // Calculate how much the bar deviates from a straight vertical line
-        val centerX = points.map { it.x }.average().toFloat()
-        val deviations = points.map { abs(it.x - centerX) }
-
-        return deviations.average().toFloat()
-    }
-
-    private fun calculateConsistencyScore(paths: List<BarPath>): Float {
-        if (paths.size < 2) return 1f
-
-        // Calculate consistency based on path similarity
-        val pathCharacteristics = paths.map { path ->
-            listOf(
-                path.getVerticalRange(),
-                path.getTotalDistance(),
-                calculateBarPathDeviation(path.points)
-            )
-        }
-
-        if (pathCharacteristics.isEmpty()) return 1f
-
-        // Calculate coefficient of variation for each characteristic
-        val consistencyScores = (0..2).map { index ->
-            val values = pathCharacteristics.map { it[index] }.filter { it > 0f }
-            if (values.isEmpty()) return@map 1f
-
-            val mean = values.average()
-            val variance = values.map { (it - mean).pow(2) }.average()
+        val consistencyScore = if (paths.size > 1) {
+            val ranges = paths.map { it.getVerticalRange() }
+            val mean = ranges.average()
+            val variance = ranges.map { (it - mean) * (it - mean) }.average()
             val stdDev = sqrt(variance)
+            maxOf(0f, 1f - (stdDev / mean).toFloat())
+        } else 1f
 
-            // Lower coefficient of variation = higher consistency
-            val coefficientOfVariation = if (mean > 0) stdDev / mean else 0.0
-            maxOf(0f, 1f - coefficientOfVariation.toFloat())
-        }
-
-        return consistencyScores.average().toFloat()
+        return LiftingMetrics(
+            totalReps = totalReps,
+            averageRepTime = averageRepTime,
+            averageRangeOfMotion = averageROM,
+            barPathDeviation = barPathDeviation,
+            consistencyScore = consistencyScore
+        )
     }
 }
