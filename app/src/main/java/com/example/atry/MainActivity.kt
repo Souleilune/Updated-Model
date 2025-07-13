@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
+import android.util.Size // Import Android's Size class
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -33,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -51,7 +51,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.atry.detector.BitmapUtils
 import com.example.atry.detector.Detection
-import com.example.atry.detector.YOLOv11ObjectDetector
+import com.example.atry.detector.NewYOLODetector
 import com.example.atry.detector.BarPathAnalyzer
 import com.example.atry.detector.ReportGenerator
 import com.example.atry.detector.PathPoint
@@ -262,13 +262,34 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
 
     val detector = remember {
         try {
-            Log.d("HighFPS", "Creating optimized YOLOv11 detector")
-            YOLOv11ObjectDetector(
-                context = context,
-                modelPath = "new model.tflite",
-                confThreshold = 0.2f, // Lowered for better detection
-                iouThreshold = 0.45f
-            )
+            Log.d("HighFPS", "🚀 Creating BRAND NEW detector to replace old one...")
+
+            // Check if model file exists
+            val modelExists = try {
+                context.assets.open("optimizefloat16.tflite").use { true }
+            } catch (e: Exception) {
+                Log.e("HighFPS", "Model file 'optimizefloat16.tflite' not found in assets: ${e.message}")
+                false
+            }
+
+            if (!modelExists) {
+                Log.e("HighFPS", "❌ Model file missing! Please ensure 'optimizefloat16.tflite' is in src/main/assets/")
+                Toast.makeText(context, "Model file 'optimizefloat16.tflite' not found in assets folder", Toast.LENGTH_LONG).show()
+                null
+            } else {
+                Log.d("HighFPS", "✅ Model file found, creating BRAND NEW detector...")
+
+                // EXPLICITLY create NewYOLODetector to replace any old ones
+                val newDetector = NewYOLODetector(
+                    context = context,
+                    modelPath = "optimizefloat16.tflite",
+                    confThreshold = 0.05f, // Very low threshold for testing
+                    iouThreshold = 0.45f
+                )
+
+                Log.d("HighFPS", "✅ BRAND NEW detector created successfully!")
+                newDetector
+            }
         } catch (e: Exception) {
             Log.e("HighFPS", "Failed to create detector: ${e.message}", e)
             Toast.makeText(context, "Failed to load AI model: ${e.message}", Toast.LENGTH_LONG).show()
@@ -292,7 +313,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Check if new model.tflite is in assets folder",
+                    text = "Check if optimizefloat16.tflite is in assets folder",
                     color = Color.Gray,
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center
@@ -328,11 +349,11 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
     var frameCount by remember { mutableStateOf(0) }
     var lastFpsUpdate by remember { mutableStateOf(System.currentTimeMillis()) }
 
-    // HIGH-FPS optimized constants
-    val maxPathPoints = 150 // Reduced for better performance
-    val minMovementThreshold = 0.02f // Optimized threshold
-    val inactivityTimeoutMs = 2500L // Reduced timeout
-    val minSessionDurationMs = 1500L // Reduced minimum duration
+    // BALANCED optimization constants
+    val maxPathPoints = 200 // Increased for better tracking
+    val minMovementThreshold = 0.015f // More sensitive
+    val inactivityTimeoutMs = 3500L // Longer timeout
+    val minSessionDurationMs = 2000L // Longer minimum duration
 
     // FPS optimization variables
     var cachedDetections by remember { mutableStateOf<List<Detection>>(emptyList()) }
@@ -355,16 +376,16 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
             val cameraProvider = ProcessCameraProvider.getInstance(context).get()
 
             val preview = Preview.Builder()
-                .setTargetResolution(Size(480, 480))  // Smaller resolution for speed
+                .setTargetResolution(Size(640, 640))  // Better resolution for detection
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             val imageAnalysis = androidx.camera.core.ImageAnalysis.Builder()
-                .setTargetResolution(Size(480, 480))  // Smaller for faster processing
+                .setTargetResolution(Size(640, 640))  // Better resolution for detection
                 .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setImageQueueDepth(1)
+                .setImageQueueDepth(2) // Slightly larger queue
                 .build()
                 .also { analyzer ->
                     analyzer.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
@@ -372,23 +393,40 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                         frameCount++
                         val currentTime = System.currentTimeMillis()
 
-                        // ADAPTIVE FRAME SKIPPING based on FPS performance
+                        // BALANCED FRAME PROCESSING - less aggressive for better detection
                         val shouldProcess = when {
-                            fps < 8f -> frameCount % 6 == 0   // Very aggressive skipping
-                            fps < 12f -> frameCount % 4 == 0  // Aggressive skipping
-                            fps < 18f -> frameCount % 3 == 0  // Moderate skipping
-                            else -> frameCount % 2 == 0       // Light skipping
+                            fps < 10f -> frameCount % 3 == 0   // Moderate skipping when struggling
+                            fps < 15f -> frameCount % 2 == 0   // Light skipping
+                            else -> true                       // Process all frames when FPS is good
                         }
 
                         if (shouldProcess && !isProcessing) {
                             isProcessing = true
 
                             try {
-                                // FAST PROCESSING with smaller image
+                                // PROPER PROCESSING with correct input size - USING NEW DETECTOR
                                 val bitmap = BitmapUtils.imageProxyToBitmap(imageProxy)
-                                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 320, 320, false)
-                                val newDetections = detector.detect(scaledBitmap)
+                                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true) // Must match model input!
 
+                                Log.d("NEW_DETECTOR", "🎯 Using NEW detector for inference...")
+                                val newDetections = detector.detect(scaledBitmap)
+                                Log.d("NEW_DETECTOR", "✅ NEW detector returned ${newDetections.size} detections")
+
+                                // Debug logging every 30 frames
+                                if (frameCount % 30 == 0) {
+                                    Log.d("Detection", "===== FRAME $frameCount DEBUG =====")
+                                    Log.d("Detection", "Input bitmap: ${bitmap.width}x${bitmap.height}")
+                                    Log.d("Detection", "Scaled bitmap: ${scaledBitmap.width}x${scaledBitmap.height}")
+                                    Log.d("Detection", "Found ${newDetections.size} detections")
+                                    newDetections.forEachIndexed { idx, detection ->
+                                        Log.d("Detection", "Detection $idx: Confidence=${String.format("%.3f", detection.score)}")
+                                        Log.d("Detection", "  BBox: left=${String.format("%.3f", detection.bbox.left)}, top=${String.format("%.3f", detection.bbox.top)}, right=${String.format("%.3f", detection.bbox.right)}, bottom=${String.format("%.3f", detection.bbox.bottom)}")
+                                        Log.d("Detection", "  Size: width=${String.format("%.3f", detection.bbox.right - detection.bbox.left)}, height=${String.format("%.3f", detection.bbox.bottom - detection.bbox.top)}")
+                                    }
+                                    Log.d("Detection", "================================")
+                                }
+
+                                // Update detections every time we process
                                 cachedDetections = newDetections
                                 detections = newDetections
 
@@ -854,7 +892,7 @@ private fun DrawScope.drawAutomaticBarPaths(paths: List<BarPath>) {
 // Optimized detection drawing
 private fun DrawScope.drawDetections(
     detections: List<Detection>,
-    detector: YOLOv11ObjectDetector
+    detector: NewYOLODetector
 ) {
     val canvasWidth = size.width
     val canvasHeight = size.height

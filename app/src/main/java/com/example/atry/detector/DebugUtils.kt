@@ -12,6 +12,7 @@ import java.io.FileOutputStream
 
 /**
  * Debug utilities for troubleshooting YOLOv11 detection issues
+ * FIXED: Updated to work with NewYOLODetector and Detection classes
  */
 object DebugUtils {
     private const val TAG = "DebugUtils"
@@ -146,13 +147,13 @@ object DebugUtils {
     }
 
     /**
-     * Test model with a synthetic image
+     * Test model with a synthetic image - FIXED to use NewYOLODetector
      */
-    fun testModelWithSyntheticImage(detector: YOLOv11ObjectDetector, context: Context): List<Detection> {
+    fun testModelWithSyntheticImage(detector: NewYOLODetector, context: Context): List<Detection> {
         val testBitmap = createTestBitmap()
         saveBitmapForDebugging(context, testBitmap, "test_input.png")
 
-        Log.d(TAG, "Testing model with synthetic barbell image...")
+        Log.d(TAG, "Testing NEW detector with synthetic barbell image...")
         val detections = detector.detect(testBitmap)
 
         Log.d(TAG, "Synthetic test results: ${detections.size} detections")
@@ -188,5 +189,46 @@ object DebugUtils {
                     "class=${detection.classId}")
         }
         Log.d(TAG, "=== END DETECTION PIPELINE ===")
+    }
+
+    /**
+     * Test the detector with a synthetic image and log detailed results
+     */
+    fun runDetectorTest(detector: NewYOLODetector, context: Context) {
+        Log.d(TAG, "🧪 Running detector test with synthetic image...")
+
+        try {
+            val testBitmap = createTestBitmap()
+            saveBitmapForDebugging(context, testBitmap, "synthetic_test.png")
+
+            Log.d(TAG, "Test image created: ${testBitmap.width}x${testBitmap.height}")
+
+            val startTime = System.currentTimeMillis()
+            val detections = detector.detect(testBitmap)
+            val testTime = System.currentTimeMillis() - startTime
+
+            Log.d(TAG, "✅ Test completed in ${testTime}ms")
+            Log.d(TAG, "📊 Test results: ${detections.size} detections found")
+
+            if (detections.isNotEmpty()) {
+                detections.forEachIndexed { index, detection ->
+                    val bbox = detection.bbox
+                    val width = bbox.right - bbox.left
+                    val height = bbox.bottom - bbox.top
+                    val area = width * height
+
+                    Log.d(TAG, "🎯 Detection $index:")
+                    Log.d(TAG, "   Confidence: ${String.format("%.4f", detection.score)}")
+                    Log.d(TAG, "   BBox: [${String.format("%.3f", bbox.left)}, ${String.format("%.3f", bbox.top)}, ${String.format("%.3f", bbox.right)}, ${String.format("%.3f", bbox.bottom)}]")
+                    Log.d(TAG, "   Size: ${String.format("%.3f", width)} x ${String.format("%.3f", height)} (area: ${String.format("%.4f", area)})")
+                    Log.d(TAG, "   Class: ${detection.classId}")
+                }
+            } else {
+                Log.w(TAG, "❌ No detections found in synthetic test image")
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during detector test: ${e.message}", e)
+        }
     }
 }
