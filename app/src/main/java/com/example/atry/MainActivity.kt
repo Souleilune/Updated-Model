@@ -1,11 +1,11 @@
+// Updated MainActivity.kt with automatic bar path tracking
+
 package com.example.atry
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
-import android.util.Size // Import Android's Size class
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,6 +21,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -51,7 +53,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.example.atry.detector.BitmapUtils
 import com.example.atry.detector.Detection
-import com.example.atry.detector.NewYOLODetector
+import com.example.atry.detector.YOLOv11ObjectDetector
 import com.example.atry.detector.BarPathAnalyzer
 import com.example.atry.detector.ReportGenerator
 import com.example.atry.detector.PathPoint
@@ -258,40 +260,19 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    Log.d("HighFPS", "Initializing high-FPS camera preview")
+    Log.d("AutomaticCameraPreview", "Initializing automatic camera preview")
 
     val detector = remember {
         try {
-            Log.d("HighFPS", "🚀 Creating BRAND NEW detector to replace old one...")
-
-            // Check if model file exists
-            val modelExists = try {
-                context.assets.open("optimizefloat16.tflite").use { true }
-            } catch (e: Exception) {
-                Log.e("HighFPS", "Model file 'optimizefloat16.tflite' not found in assets: ${e.message}")
-                false
-            }
-
-            if (!modelExists) {
-                Log.e("HighFPS", "❌ Model file missing! Please ensure 'optimizefloat16.tflite' is in src/main/assets/")
-                Toast.makeText(context, "Model file 'optimizefloat16.tflite' not found in assets folder", Toast.LENGTH_LONG).show()
-                null
-            } else {
-                Log.d("HighFPS", "✅ Model file found, creating BRAND NEW detector...")
-
-                // EXPLICITLY create NewYOLODetector to replace any old ones
-                val newDetector = NewYOLODetector(
-                    context = context,
-                    modelPath = "optimizefloat16.tflite",
-                    confThreshold = 0.05f, // Very low threshold for testing
-                    iouThreshold = 0.45f
-                )
-
-                Log.d("HighFPS", "✅ BRAND NEW detector created successfully!")
-                newDetector
-            }
+            Log.d("AutomaticCameraPreview", "Creating YOLOv11 detector")
+            YOLOv11ObjectDetector(
+                context = context,
+                modelPath = "optimizefloat16.tflite",
+                confThreshold = 0.25f, // Slightly higher for more stable detection
+                iouThreshold = 0.45f
+            )
         } catch (e: Exception) {
-            Log.e("HighFPS", "Failed to create detector: ${e.message}", e)
+            Log.e("AutomaticCameraPreview", "Failed to create detector: ${e.message}", e)
             Toast.makeText(context, "Failed to load AI model: ${e.message}", Toast.LENGTH_LONG).show()
             null
         }
@@ -313,7 +294,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Check if optimizefloat16.tflite is in assets folder",
+                    text = "Check if new model.tflite is in assets folder",
                     color = Color.Gray,
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center
@@ -325,7 +306,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
 
     val previewView = remember { PreviewView(context) }
 
-    // State variables for high-FPS automatic tracking
+    // State variables for automatic tracking
     var detections by remember { mutableStateOf<List<Detection>>(emptyList()) }
     var isProcessing by remember { mutableStateOf(false) }
     var fps by remember { mutableStateOf(0f) }
@@ -349,106 +330,73 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
     var frameCount by remember { mutableStateOf(0) }
     var lastFpsUpdate by remember { mutableStateOf(System.currentTimeMillis()) }
 
-    // BALANCED optimization constants
-    val maxPathPoints = 200 // Increased for better tracking
+    // Enhanced constants for automatic tracking
+    val maxPathPoints = 300 // Reduced for better performance
     val minMovementThreshold = 0.015f // More sensitive
-    val inactivityTimeoutMs = 3500L // Longer timeout
-    val minSessionDurationMs = 2000L // Longer minimum duration
-
-    // FPS optimization variables
-    var cachedDetections by remember { mutableStateOf<List<Detection>>(emptyList()) }
+    val inactivityTimeoutMs = 3000L // 3 seconds of no detection = end session
+    val minSessionDurationMs = 2000L // Minimum 2 seconds for a valid session
+    val pathSegmentTimeoutMs = 1500L // 1.5 seconds = new path segment
 
     DisposableEffect(detector) {
         onDispose {
             try {
                 detector.close()
-                Log.d("HighFPS", "Detector closed successfully")
+                Log.d("AutomaticCameraPreview", "Detector closed successfully")
             } catch (e: Exception) {
-                Log.e("HighFPS", "Error closing detector: ${e.message}", e)
+                Log.e("AutomaticCameraPreview", "Error closing detector: ${e.message}", e)
             }
         }
     }
 
-    // HIGH-FPS Camera setup with aggressive optimizations
+    // Camera setup
     LaunchedEffect(previewView) {
         try {
-            Log.d("HighFPS", "Setting up high-FPS camera")
+            Log.d("AutomaticCameraPreview", "Setting up camera")
             val cameraProvider = ProcessCameraProvider.getInstance(context).get()
 
             val preview = Preview.Builder()
-                .setTargetResolution(Size(640, 640))  // Better resolution for detection
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             val imageAnalysis = androidx.camera.core.ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 640))  // Better resolution for detection
                 .setBackpressureStrategy(androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setImageQueueDepth(2) // Slightly larger queue
                 .build()
                 .also { analyzer ->
                     analyzer.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-
-                        frameCount++
-                        val currentTime = System.currentTimeMillis()
-
-                        // BALANCED FRAME PROCESSING - less aggressive for better detection
-                        val shouldProcess = when {
-                            fps < 10f -> frameCount % 3 == 0   // Moderate skipping when struggling
-                            fps < 15f -> frameCount % 2 == 0   // Light skipping
-                            else -> true                       // Process all frames when FPS is good
-                        }
-
-                        if (shouldProcess && !isProcessing) {
+                        if (!isProcessing) {
                             isProcessing = true
 
                             try {
-                                // PROPER PROCESSING with correct input size - USING NEW DETECTOR
                                 val bitmap = BitmapUtils.imageProxyToBitmap(imageProxy)
-                                val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 640, 640, true) // Must match model input!
-
-                                Log.d("NEW_DETECTOR", "🎯 Using NEW detector for inference...")
-                                val newDetections = detector.detect(scaledBitmap)
-                                Log.d("NEW_DETECTOR", "✅ NEW detector returned ${newDetections.size} detections")
-
-                                // Debug logging every 30 frames
-                                if (frameCount % 30 == 0) {
-                                    Log.d("Detection", "===== FRAME $frameCount DEBUG =====")
-                                    Log.d("Detection", "Input bitmap: ${bitmap.width}x${bitmap.height}")
-                                    Log.d("Detection", "Scaled bitmap: ${scaledBitmap.width}x${scaledBitmap.height}")
-                                    Log.d("Detection", "Found ${newDetections.size} detections")
-                                    newDetections.forEachIndexed { idx, detection ->
-                                        Log.d("Detection", "Detection $idx: Confidence=${String.format("%.3f", detection.score)}")
-                                        Log.d("Detection", "  BBox: left=${String.format("%.3f", detection.bbox.left)}, top=${String.format("%.3f", detection.bbox.top)}, right=${String.format("%.3f", detection.bbox.right)}, bottom=${String.format("%.3f", detection.bbox.bottom)}")
-                                        Log.d("Detection", "  Size: width=${String.format("%.3f", detection.bbox.right - detection.bbox.left)}, height=${String.format("%.3f", detection.bbox.bottom - detection.bbox.top)}")
-                                    }
-                                    Log.d("Detection", "================================")
-                                }
-
-                                // Update detections every time we process
-                                cachedDetections = newDetections
+                                val newDetections = detector.detect(bitmap)
                                 detections = newDetections
 
-                                // FAST TRACKING LOGIC
+                                val currentTime = System.currentTimeMillis()
+
+                                // AUTOMATIC TRACKING LOGIC
                                 if (newDetections.isNotEmpty()) {
                                     lastDetectionTime = currentTime
 
+                                    // Start new session if not active
                                     if (!activeTrackingSession) {
                                         activeTrackingSession = true
                                         pathStartTime = currentTime
                                         sessionStartTime = currentTime
                                         barPaths = listOf(BarPath())
-                                        Log.d("HighFPS", "Fast tracking session started")
+                                        Log.d("AutoTracking", "Started new automatic tracking session")
                                     }
 
-                                    // ULTRA-FAST PATH PROCESSING
-                                    val updatedData = processFastBarPath(
+                                    // Process bar path automatically
+                                    val updatedData = processAutomaticBarPath(
                                         detections = newDetections,
                                         currentPaths = barPaths,
                                         currentTime = currentTime,
+                                        pathStartTime = pathStartTime,
                                         maxPoints = maxPathPoints,
-                                        minThreshold = minMovementThreshold
+                                        minThreshold = minMovementThreshold,
+                                        segmentTimeoutMs = pathSegmentTimeoutMs
                                     )
 
                                     barPaths = updatedData.paths
@@ -461,39 +409,37 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                                     }
 
                                 } else {
-                                    // Quick timeout check
+                                    // Check for session timeout
                                     if (activeTrackingSession &&
                                         currentTime - lastDetectionTime > inactivityTimeoutMs) {
+
+                                        val sessionDuration = currentTime - sessionStartTime
+                                        if (sessionDuration > minSessionDurationMs) {
+                                            Log.d("AutoTracking", "Session ended after ${sessionDuration}ms, reps: $repCount")
+                                        }
+
+                                        // End session but keep paths visible for a while
                                         activeTrackingSession = false
-                                        Log.d("HighFPS", "Fast session ended")
                                     }
                                 }
 
-                                // EFFICIENT FPS calculation
+                                // Calculate FPS
+                                frameCount++
                                 if (currentTime - lastFpsUpdate >= 1000) {
                                     fps = frameCount * 1000f / (currentTime - lastFpsUpdate)
                                     frameCount = 0
                                     lastFpsUpdate = currentTime
-                                    Log.d("HighFPS", "FPS: ${String.format("%.1f", fps)}")
                                 }
 
                             } catch (e: Exception) {
-                                Log.e("HighFPS", "Fast processing error: ${e.message}")
+                                Log.e("AutomaticCameraPreview", "Error processing frame: ${e.message}", e)
+                                cameraError = "Frame processing error: ${e.message}"
                             } finally {
                                 isProcessing = false
                                 imageProxy.close()
                             }
                         } else {
-                            // SKIP FRAME - use cached detections for smooth UI
-                            detections = cachedDetections
                             imageProxy.close()
-
-                            // Still update FPS counter for skipped frames
-                            if (currentTime - lastFpsUpdate >= 1000) {
-                                fps = frameCount * 1000f / (currentTime - lastFpsUpdate)
-                                frameCount = 0
-                                lastFpsUpdate = currentTime
-                            }
                         }
                     }
                 }
@@ -506,12 +452,12 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                 imageAnalysis
             )
 
-            Log.d("HighFPS", "High-FPS camera setup completed successfully")
+            Log.d("AutomaticCameraPreview", "Camera bound successfully")
             cameraError = null
 
         } catch (e: Exception) {
-            val errorMsg = "High-FPS camera setup failed: ${e.message}"
-            Log.e("HighFPS", errorMsg, e)
+            val errorMsg = "Camera setup failed: ${e.message}"
+            Log.e("AutomaticCameraPreview", errorMsg, e)
             cameraError = errorMsg
             Toast.makeText(context, errorMsg, Toast.LENGTH_LONG).show()
         }
@@ -519,12 +465,12 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
 
     // Auto-cleanup paths every 30 seconds
     LaunchedEffect(barPaths) {
-        delay(30000)
+        delay(30000) // 30 seconds
         if (!activeTrackingSession && barPaths.isNotEmpty()) {
             val currentTime = System.currentTimeMillis()
             val cleanedPaths = barPaths.map { path ->
                 if (path.points.isNotEmpty()) {
-                    val cutoffTime = currentTime - 15000L
+                    val cutoffTime = currentTime - 15000L // Keep last 15 seconds
                     val filteredPoints = path.points.filter { it.timestamp > cutoffTime }
                     path.copy(points = filteredPoints.toMutableList())
                 } else {
@@ -534,7 +480,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
 
             if (cleanedPaths != barPaths) {
                 barPaths = cleanedPaths
-                Log.d("HighFPS", "Auto-cleaned old path segments")
+                Log.d("AutoTracking", "Auto-cleaned old path segments")
             }
         }
     }
@@ -593,7 +539,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                     currentMovement = null
                     allMovements = emptyList()
                     activeTrackingSession = false
-                    Log.d("HighFPS", "Manually cleared all paths")
+                    Log.d("AutoTracking", "Manually cleared all paths")
                 },
                 onGenerateExcelReport = {
                     scope.launch {
@@ -615,7 +561,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                                 },
                                 onFailure = { error ->
                                     Toast.makeText(context, "Error generating Excel report: ${error.message}", Toast.LENGTH_LONG).show()
-                                    Log.e("HighFPS", "Excel report error", error)
+                                    Log.e("AutoTracking", "Excel report error", error)
                                 }
                             )
                         } finally {
@@ -643,7 +589,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
                                 },
                                 onFailure = { error ->
                                     Toast.makeText(context, "Error generating CSV report: ${error.message}", Toast.LENGTH_LONG).show()
-                                    Log.e("HighFPS", "CSV report error", error)
+                                    Log.e("AutoTracking", "CSV report error", error)
                                 }
                             )
                         } finally {
@@ -657,7 +603,7 @@ private fun AutomaticCameraPreviewWithYOLOv11() {
     }
 }
 
-// Data classes
+// Enhanced data class for automatic tracking results
 data class AutomaticBarPathResult(
     val paths: List<BarPath>,
     val movement: MovementAnalysis?,
@@ -665,34 +611,48 @@ data class AutomaticBarPathResult(
     val totalDistance: Float
 )
 
-// ULTRA-FAST BAR PATH PROCESSING for high FPS
-private fun processFastBarPath(
+// Enhanced automatic bar path processing with intelligent segmentation
+private fun processAutomaticBarPath(
     detections: List<Detection>,
     currentPaths: List<BarPath>,
     currentTime: Long,
+    pathStartTime: Long,
     maxPoints: Int,
-    minThreshold: Float
+    minThreshold: Float,
+    segmentTimeoutMs: Long
 ): AutomaticBarPathResult {
 
     if (detections.isEmpty()) {
         return AutomaticBarPathResult(currentPaths, null, 0, 0f)
     }
 
-    // SINGLE detection processing for maximum speed
     val detection = detections.first()
     val centerX = (detection.bbox.left + detection.bbox.right) / 2f
     val centerY = (detection.bbox.top + detection.bbox.bottom) / 2f
     val newPoint = PathPoint(centerX, centerY, currentTime)
 
     var workingPaths = currentPaths.toMutableList()
-    var activePath = workingPaths.lastOrNull() ?: BarPath().also { workingPaths.add(it) }
+    var activePath = workingPaths.lastOrNull()
 
-    // FAST distance check using Manhattan distance (faster than Euclidean)
+    // Create new path if none exists or if there's a time gap
+    if (activePath == null ||
+        (activePath.points.isNotEmpty() &&
+                currentTime - activePath.points.last().timestamp > segmentTimeoutMs)) {
+
+        activePath = BarPath(
+            color = getPathColor(workingPaths.size),
+            startTime = currentTime
+        )
+        workingPaths.add(activePath)
+        Log.d("AutoPath", "Created new path segment #${workingPaths.size}")
+    }
+
+    // Check if movement is significant enough
     val shouldAddPoint = if (activePath.points.isEmpty()) {
         true
     } else {
         val lastPoint = activePath.points.last()
-        val distance = abs(newPoint.x - lastPoint.x) + abs(newPoint.y - lastPoint.y)
+        val distance = newPoint.distanceTo(lastPoint)
         distance > minThreshold
     }
 
@@ -700,105 +660,32 @@ private fun processFastBarPath(
         return AutomaticBarPathResult(workingPaths, null, 0, 0f)
     }
 
-    // ADD point with immediate aggressive trimming
+    // Add point with intelligent path management
     activePath.addPoint(newPoint, maxPoints)
 
-    if (activePath.points.size > maxPoints) {
-        val keepCount = maxPoints * 2 / 3
-        val trimmedPoints = activePath.points.takeLast(keepCount)
+    // Automatically trim old points if path gets too long
+    if (activePath.points.size > maxPoints * 0.8) {
+        val pointsToKeep = (maxPoints * 0.6).toInt()
+        val trimmedPoints = activePath.points.takeLast(pointsToKeep)
         activePath.points.clear()
         activePath.points.addAll(trimmedPoints)
+        Log.d("AutoPath", "Trimmed path to $pointsToKeep points")
     }
 
-    // FAST analysis using optimized functions
-    val movement = fastAnalyzeMovement(activePath.points)
-    val totalReps = fastRepCount(activePath.points)
-    val totalDistance = activePath.getTotalDistance()
+    // Analyze movement
+    val movement = analyzeMovement(activePath.points)
+
+    // Count reps across all paths
+    val totalReps = workingPaths.map { path ->
+        if (path.points.size > 20) countReps(path.points) else 0
+    }.sum()
+
+    // Calculate total distance
+    val totalDistance = workingPaths.map { it.getTotalDistance() }.sum()
+
+    Log.d("AutoPath", "Auto-processed: ${activePath.points.size} points, $totalReps reps, distance: $totalDistance")
 
     return AutomaticBarPathResult(workingPaths, movement, totalReps, totalDistance)
-}
-
-// ULTRA-FAST movement analysis
-private fun fastAnalyzeMovement(points: List<PathPoint>): MovementAnalysis? {
-    if (points.size < 3) return null
-
-    val recent = points.takeLast(4) // Minimal analysis window
-    if (recent.size < 2) return null
-
-    val verticalChange = recent.last().y - recent.first().y
-    val timeSpan = (recent.last().timestamp - recent.first().timestamp) / 1000f
-
-    val direction = when {
-        verticalChange > 0.02f -> MovementDirection.DOWN
-        verticalChange < -0.02f -> MovementDirection.UP
-        else -> MovementDirection.STABLE
-    }
-
-    val velocity = if (timeSpan > 0) abs(verticalChange) / timeSpan else 0f
-    val totalDistance = recent.zipWithNext { a, b -> a.distanceTo(b) }.sum()
-
-    return MovementAnalysis(
-        direction = direction,
-        velocity = velocity,
-        acceleration = 0f,
-        totalDistance = totalDistance,
-        repCount = 0
-    )
-}
-
-// ULTRA-FAST rep counting with achievable thresholds
-private fun fastRepCount(points: List<PathPoint>): Int {
-    if (points.size < 8) return 0
-
-    var repCount = 0
-    var isInRep = false
-    var startY: Float? = null
-    var peakY: Float? = null
-
-    val minMovement = 0.05f // REDUCED threshold - only 5% of screen
-    val step = 2 // Process every 2nd point for maximum speed
-
-    for (i in step until points.size step step) {
-        val currentY = points[i].y
-
-        // SIMPLE direction calculation using just 2 points
-        val prevY = points[maxOf(0, i - step)].y
-        val direction = when {
-            currentY - prevY > 0.008f -> MovementDirection.DOWN
-            currentY - prevY < -0.008f -> MovementDirection.UP
-            else -> MovementDirection.STABLE
-        }
-
-        when {
-            // START rep: detect upward movement
-            !isInRep && direction == MovementDirection.UP -> {
-                isInRep = true
-                startY = currentY
-                peakY = currentY
-            }
-
-            // TRACK peak position
-            isInRep && currentY > (peakY ?: 0f) -> {
-                peakY = currentY
-            }
-
-            // COMPLETE rep: downward movement with sufficient range
-            isInRep && direction == MovementDirection.DOWN && peakY != null && startY != null -> {
-                val totalMovement = peakY!! - startY!!
-                val returnedToStart = currentY <= startY!! + (totalMovement * 0.4f) // Very forgiving
-
-                if (totalMovement >= minMovement && returnedToStart) {
-                    repCount++
-                    isInRep = false
-                    Log.d("FastRep", "⚡ FAST REP! Count: $repCount, Movement: ${String.format("%.3f", totalMovement)}")
-                    startY = currentY
-                    peakY = null
-                }
-            }
-        }
-    }
-
-    return repCount
 }
 
 // Generate different colors for path segments
@@ -849,9 +736,11 @@ private fun DrawScope.drawAutomaticBarPaths(paths: List<BarPath>) {
                     end = Offset(endX, endY),
                     strokeWidth = 4.dp.toPx(),
                     pathEffect = if (pathIndex == paths.size - 1) {
-                        null // Solid line for current path
+                        // Solid line for current path
+                        null
                     } else {
-                        PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f) // Dashed for older paths
+                        // Dashed line for older paths
+                        PathEffect.dashPathEffect(floatArrayOf(10f, 5f), 0f)
                     }
                 )
             }
@@ -889,10 +778,10 @@ private fun DrawScope.drawAutomaticBarPaths(paths: List<BarPath>) {
     }
 }
 
-// Optimized detection drawing
+// Keep the existing drawDetections function unchanged
 private fun DrawScope.drawDetections(
     detections: List<Detection>,
-    detector: NewYOLODetector
+    detector: YOLOv11ObjectDetector
 ) {
     val canvasWidth = size.width
     val canvasHeight = size.height
@@ -919,7 +808,7 @@ private fun DrawScope.drawDetections(
             drawRect(
                 color = Color.Green,
                 topLeft = Offset(left, top),
-                size = androidx.compose.ui.geometry.Size(right - left, bottom - top),
+                size = Size(right - left, bottom - top),
                 style = Stroke(width = 2.dp.toPx())
             )
 
@@ -958,6 +847,100 @@ private fun DrawScope.drawDetections(
     }
 }
 
+// Keep existing analyzeMovement and countReps functions
+private fun analyzeMovement(points: List<PathPoint>): MovementAnalysis? {
+    if (points.size < 5) return null
+
+    val recentPoints = points.takeLast(10)
+    val totalVerticalMovement = recentPoints.zipWithNext { a, b -> b.y - a.y }.sum()
+    val totalTime = recentPoints.last().timestamp - recentPoints.first().timestamp
+
+    val velocity = if (totalTime > 0) abs(totalVerticalMovement) / (totalTime / 1000f) else 0f
+
+    val direction = when {
+        totalVerticalMovement > 0.02f -> MovementDirection.DOWN
+        totalVerticalMovement < -0.02f -> MovementDirection.UP
+        else -> MovementDirection.STABLE
+    }
+
+    val totalDistance = points.zipWithNext { a, b -> a.distanceTo(b) }.sum()
+
+    return MovementAnalysis(
+        direction = direction,
+        velocity = velocity,
+        acceleration = 0f,
+        totalDistance = totalDistance,
+        repCount = 0
+    )
+}
+
+private fun countReps(points: List<PathPoint>): Int {
+    if (points.size < 20) return 0
+
+    var repCount = 0
+    var lastDirection: MovementDirection? = null
+    var inUpPhase = false
+    val smoothingWindow = 5
+    val repThreshold = 0.05f
+
+    for (i in smoothingWindow until points.size - smoothingWindow) {
+        val beforeY = points.subList(i - smoothingWindow, i).map { it.y }.average().toFloat()
+        val afterY = points.subList(i, i + smoothingWindow).map { it.y }.average().toFloat()
+
+        val currentDirection = when {
+            afterY - beforeY > 0.02f -> MovementDirection.DOWN
+            afterY - beforeY < -0.02f -> MovementDirection.UP
+            else -> MovementDirection.STABLE
+        }
+
+        if (lastDirection == MovementDirection.UP && currentDirection == MovementDirection.DOWN && inUpPhase) {
+            val upStartIndex = findLastDirectionChange(points, i, MovementDirection.DOWN, MovementDirection.UP, smoothingWindow)
+            if (upStartIndex != -1) {
+                val displacement = abs(points[i].y - points[upStartIndex].y)
+                if (displacement > repThreshold) {
+                    repCount++
+                    inUpPhase = false
+                    Log.d("AutoRepCounter", "Rep detected! Count: $repCount, Displacement: $displacement")
+                }
+            }
+        }
+
+        if (lastDirection == MovementDirection.DOWN && currentDirection == MovementDirection.UP) {
+            inUpPhase = true
+        }
+
+        if (currentDirection != MovementDirection.STABLE) {
+            lastDirection = currentDirection
+        }
+    }
+
+    return repCount
+}
+
+private fun findLastDirectionChange(
+    points: List<PathPoint>,
+    currentIndex: Int,
+    fromDirection: MovementDirection,
+    toDirection: MovementDirection,
+    smoothingWindow: Int
+): Int {
+    for (i in currentIndex - 1 downTo smoothingWindow) {
+        val beforeY = points.subList(i - smoothingWindow, i).map { it.y }.average().toFloat()
+        val afterY = points.subList(i, i + smoothingWindow).map { it.y }.average().toFloat()
+
+        val direction = when {
+            afterY - beforeY > 0.02f -> MovementDirection.DOWN
+            afterY - beforeY < -0.02f -> MovementDirection.UP
+            else -> MovementDirection.STABLE
+        }
+
+        if (direction == fromDirection) {
+            return i
+        }
+    }
+    return -1
+}
+
 @Composable
 private fun AutomaticInfoPanel(
     detections: List<Detection>,
@@ -989,7 +972,7 @@ private fun AutomaticInfoPanel(
                 horizontalArrangement = Arrangement.Center
             ) {
                 Text(
-                    text = "⚡ High-FPS Bar Tracker",
+                    text = "🤖 Auto Bar Path Tracker",
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -1008,7 +991,7 @@ private fun AutomaticInfoPanel(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            // Control buttons
+            // Control buttons - only Clear and Report generation
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(horizontal = 8.dp)
@@ -1021,7 +1004,7 @@ private fun AutomaticInfoPanel(
                     Text("🗑️ Clear", fontSize = 11.sp, color = Color.White)
                 }
 
-                // Report generation buttons
+                // Report generation buttons - only show if we have data
                 AnimatedVisibility(visible = repCount > 0) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Button(
@@ -1060,7 +1043,7 @@ private fun AutomaticInfoPanel(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Status information
+            // Status information with automatic tracking indicators
             Text(
                 text = "Auto Mode: ${if (activeTrackingSession) "TRACKING" else "STANDBY"}",
                 color = if (activeTrackingSession) Color.Green else Color.Yellow,
@@ -1130,7 +1113,7 @@ private fun AutomaticInfoPanel(
                 }
             }
 
-            // Detection details
+            // Detection details (compact)
             if (detections.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(4.dp))
                 detections.take(1).forEachIndexed { index, detection ->

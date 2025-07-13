@@ -149,7 +149,7 @@ object DebugUtils {
     /**
      * Test model with a synthetic image - FIXED to use NewYOLODetector
      */
-    fun testModelWithSyntheticImage(detector: NewYOLODetector, context: Context): List<Detection> {
+    fun testModelWithSyntheticImage(detector: YOLOv11ObjectDetector, context: Context): List<Detection> {
         val testBitmap = createTestBitmap()
         saveBitmapForDebugging(context, testBitmap, "test_input.png")
 
@@ -194,7 +194,7 @@ object DebugUtils {
     /**
      * Test the detector with a synthetic image and log detailed results
      */
-    fun runDetectorTest(detector: NewYOLODetector, context: Context) {
+    fun runDetectorTest(detector: YOLOv11ObjectDetector, context: Context) {
         Log.d(TAG, "🧪 Running detector test with synthetic image...")
 
         try {
