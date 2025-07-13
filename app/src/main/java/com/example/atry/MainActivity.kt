@@ -734,7 +734,7 @@ private fun DrawScope.drawAutomaticBarPaths(paths: List<BarPath>) {
                     color = path.color.copy(alpha = finalAlpha),
                     start = Offset(startX, startY),
                     end = Offset(endX, endY),
-                    strokeWidth = 4.dp.toPx(),
+                    strokeWidth = 2.dp.toPx(),
                     pathEffect = if (pathIndex == paths.size - 1) {
                         // Solid line for current path
                         null
@@ -757,19 +757,19 @@ private fun DrawScope.drawAutomaticBarPaths(paths: List<BarPath>) {
                     // Current point - larger and pulsing
                     drawCircle(
                         color = Color.White,
-                        radius = 12.dp.toPx(),
+                        radius = 2.dp.toPx(),
                         center = Offset(pointX, pointY)
                     )
                     drawCircle(
                         color = path.color,
-                        radius = 8.dp.toPx(),
+                        radius = 2.dp.toPx(),
                         center = Offset(pointX, pointY)
                     )
                 } else if (index % 10 == 0) {
                     // Key points every 10th point
                     drawCircle(
                         color = path.color.copy(alpha = alpha),
-                        radius = 6.dp.toPx(),
+                        radius = 2.dp.toPx(),
                         center = Offset(pointX, pointY)
                     )
                 }
@@ -800,7 +800,7 @@ private fun DrawScope.drawDetections(
         // Center point
         drawCircle(
             color = Color.White,
-            radius = 3.dp.toPx(),
+            radius = 2.dp.toPx(),
             center = Offset(centerX, centerY)
         )
 
@@ -839,7 +839,7 @@ private fun DrawScope.drawDetections(
         } else {
             drawCircle(
                 color = Color.Green,
-                radius = 40.dp.toPx(),
+                radius = 2.dp.toPx(),
                 center = Offset(centerX, centerY),
                 style = Stroke(width = 6.dp.toPx())
             )
@@ -971,22 +971,6 @@ private fun AutomaticInfoPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = "🤖 Auto Bar Path Tracker",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
-                )
-                if (activeTrackingSession) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "●",
-                        color = Color.Red,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -1001,7 +985,7 @@ private fun AutomaticInfoPanel(
                     modifier = Modifier.height(32.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
                 ) {
-                    Text("🗑️ Clear", fontSize = 11.sp, color = Color.White)
+                    Text("Clear", fontSize = 11.sp, color = Color.White)
                 }
 
                 // Report generation buttons - only show if we have data
@@ -1017,7 +1001,7 @@ private fun AutomaticInfoPanel(
                             )
                         ) {
                             Text(
-                                text = if (isGeneratingReport) "..." else "📊 Excel",
+                                text = if (isGeneratingReport) "..." else "Excel",
                                 fontSize = 11.sp,
                                 color = Color.White
                             )
@@ -1032,7 +1016,7 @@ private fun AutomaticInfoPanel(
                             )
                         ) {
                             Text(
-                                text = if (isGeneratingReport) "..." else "📋 CSV",
+                                text = if (isGeneratingReport) "..." else "CSV",
                                 fontSize = 11.sp,
                                 color = Color.White
                             )
@@ -1044,13 +1028,7 @@ private fun AutomaticInfoPanel(
             Spacer(modifier = Modifier.height(6.dp))
 
             // Status information with automatic tracking indicators
-            Text(
-                text = "Auto Mode: ${if (activeTrackingSession) "TRACKING" else "STANDBY"}",
-                color = if (activeTrackingSession) Color.Green else Color.Yellow,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+
 
             Text(
                 text = "FPS: ${String.format("%.1f", fps)} | Detections: ${detections.size}",
@@ -1064,18 +1042,7 @@ private fun AutomaticInfoPanel(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.padding(vertical = 4.dp)
             ) {
-                Text(
-                    text = "Reps: $repCount",
-                    color = Color.Cyan,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Distance: ${String.format("%.2f", totalDistance)}",
-                    color = Color.Yellow,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+
             }
 
             if (isGeneratingReport) {
@@ -1113,30 +1080,9 @@ private fun AutomaticInfoPanel(
                 }
             }
 
-            // Detection details (compact)
-            if (detections.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                detections.take(1).forEachIndexed { index, detection ->
-                    Text(
-                        text = "Barbell Conf: ${String.format("%.2f", detection.score)}",
-                        color = Color.Cyan,
-                        fontSize = 10.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
 
             // Instructions for automatic mode
-            if (!activeTrackingSession && repCount == 0) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "Point camera at barbell to start automatic tracking",
-                    color = Color.Gray,
-                    fontSize = 10.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp)
-                )
-            }
+
         }
     }
 }

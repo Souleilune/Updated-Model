@@ -141,12 +141,12 @@ class ReportGenerator(private val context: Context) {
         }
 
         // Calculate total reps across all paths
-        val totalReps = paths.map { path ->
+        val totalReps = paths.sumOf { path ->
             if (path.points.size > 20) {
                 val analysis = analyzer.analyzeMovement(path.points)
-                analysis?.repCount ?: 0
+                analysis.repCount
             } else 0
-        }.sum()
+        }
 
         // Calculate average rep time
         val totalDuration = paths.map { it.getDuration() }.sum() / 1000f // Convert to seconds
